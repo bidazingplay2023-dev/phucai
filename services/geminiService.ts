@@ -73,3 +73,50 @@ export const sceneArchitect = async (apiKey: string, mainImg: string, prompt: st
   };
   return callGemini(apiKey, payload);
 };
+// CHỨC NĂNG 3: SẢN XUẤT VIDEO (Cinematic Motion)
+export const generateCinematicVideo = async (apiKey: string, imageBase64: string, stylePrompt: string) => {
+  const base64 = await resizeImage(imageBase64);
+  
+  // Bước 1: Gửi yêu cầu khởi tạo video
+  const payload = {
+    model: "models/veo-1.0-preview-001", // Hoặc phiên bản mới nhất bạn có quyền truy cập
+    prompt: stylePrompt || "Cinematic product showcase, slow camera movement, 4k, professional lighting",
+    image: {
+      inlineData: { mimeType: "image/jpeg", data: base64 }
+    }
+  };
+
+  // Lưu ý: Endpoint cho video khác với generateContent
+  const initResponse = await fetch(`${PROXY_URL}/v1beta/models/veo-1.0-preview-001:generateVideos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(payload)
+  });
+
+  let operation = await initResponse.json();
+  const operationName = operation.name;
+
+  // Bước 2: Polling - Đợi video hoàn thành
+  let isDone = false;
+  let videoUri = "";
+
+  while (!isDone) {
+    await new Promise(resolve => setTimeout(resolve, 5000)); // Đợi 5 giây mỗi lần check
+    
+    const checkResponse = await fetch(`${PROXY_URL}/v1beta/${operationName}`, {
+      headers: { 'x-goog-api-key': apiKey }
+    });
+    
+    const status = await checkResponse.json();
+    if (status.done) {
+      isDone = true;
+      videoUri = status.response.generatedVideos[0].video.uri;
+    }
+    // Chống treo: Bạn có thể thêm biến đếm để dừng sau 2 phút nếu không xong
+  }
+
+  // Bước 3: Tải video blob về để hiển thị (để tránh lỗi bảo mật link)
+  const videoFile = await fetch(`${videoUri}&key=${apiKey}`);
+  const blob = await videoFile.blob();
+  return URL.createObjectURL(blob);
+};
