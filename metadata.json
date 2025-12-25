@@ -1,0 +1,5 @@
+{
+  "name": "AI Fashion Studio",
+  "description": "A professional AI-powered fashion studio for background removal, virtual try-on, scene generation, and video creation using Google Gemini models.",
+  "requestFramePermissions": []
+}
