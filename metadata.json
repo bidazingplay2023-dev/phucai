@@ -1,0 +1,8 @@
+{
+  "name": "Phúc Nguyễn AI Studio",
+  "description": "Bộ công cụ AI thương mại điện tử chuyên nghiệp: Thử đồ thông minh, Kiến trúc bối cảnh và Sản xuất Video.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
