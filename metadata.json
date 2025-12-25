@@ -1,5 +1,7 @@
 {
-  "name": "AI Fashion Studio",
-  "description": "A professional AI-powered fashion studio for background removal, virtual try-on, scene generation, and video creation using Google Gemini models.",
-  "requestFramePermissions": []
+  "name": "Phúc Nguyễn AI Studio",
+  "description": "Professional product isolation, background compositing, and cinematic video generation for e-commerce.",
+  "requestFramePermissions": [
+    "camera"
+  ]
 }
