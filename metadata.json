@@ -1,7 +1,8 @@
 {
   "name": "Phúc Nguyễn AI Studio",
-  "description": "Professional product isolation, background compositing, and cinematic video generation for e-commerce.",
+  "description": "Bộ công cụ AI thương mại điện tử chuyên nghiệp: Thử đồ thông minh, Kiến trúc bối cảnh và Sản xuất Video.",
   "requestFramePermissions": [
-    "camera"
+    "camera",
+    "microphone"
   ]
 }
