@@ -1,18 +1,13 @@
 
-export interface Env {
-  // Biến môi trường nếu cần
-}
-
 export default {
-  // Fix: Use any for ctx as ExecutionContext is not globally defined
-  async fetch(request: Request, env: Env, ctx: any): Promise<Response> {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const targetUrl = `https://generativelanguage.googleapis.com${url.pathname}${url.search}`;
 
     // 1. Lấy API Key từ header tùy chỉnh X-Gemini-Key
     const geminiKey = request.headers.get('X-Gemini-Key');
 
-    // 2. Chuẩn bị headers mới (Strip sensitive headers)
+    // 2. Chuẩn bị headers mới (Loại bỏ các header nhạy cảm)
     const newHeaders = new Headers(request.headers);
     newHeaders.delete('X-Gemini-Key');
     newHeaders.delete('Cookie');
@@ -58,7 +53,7 @@ export default {
       }
 
       return response;
-    } catch (error: any) {
+    } catch (error) {
       return new Response(
         JSON.stringify({ error: { message: error.message || "Gateway Error" } }),
         { status: 502, headers: { 'Content-Type': 'application/json' } }

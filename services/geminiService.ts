@@ -1,6 +1,9 @@
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
 type AppMode = 'standard' | 'premium';
+
+// Cập nhật URL chính xác từ ảnh chụp màn hình của bạn
+const PROXY_URL = "https://gemini-proxy-api.coha.workers.dev"; 
 
 // --- HELPER: Resize ảnh ---
 const resizeImage = (base64Str: string, maxWidth = 4096): Promise<string> => {
@@ -33,22 +36,38 @@ const resizeImage = (base64Str: string, maxWidth = 4096): Promise<string> => {
   });
 };
 
+// --- Custom Fetch cho SDK ---
+const customFetch = async (url: string, options: any) => {
+  // Chuyển hướng request qua Cloudflare Worker
+  const proxyUrl = url.replace("https://generativelanguage.googleapis.com", PROXY_URL);
+  
+  // Lấy key từ process.env.API_KEY (được lưu từ modal settings)
+  const apiKey = process.env.API_KEY || "";
+  
+  const newOptions = {
+    ...options,
+    headers: {
+      ...options.headers,
+      "X-Gemini-Key": apiKey, // Gửi key qua header bảo mật
+    }
+  };
+  
+  const finalUrl = new URL(proxyUrl);
+  finalUrl.searchParams.delete("key"); // Xóa key khỏi URL để tránh lộ log
+  
+  return fetch(finalUrl.toString(), newOptions);
+};
+
 async function retryOperation<T>(operation: () => Promise<T>, retries = 3, delay = 5000): Promise<T> {
   try {
     return await operation();
   } catch (error: any) {
-    let errString = "";
-    if (typeof error === 'object') {
-        errString = JSON.stringify(error);
-    } else {
-        errString = String(error);
-    }
+    let errString = typeof error === 'object' ? JSON.stringify(error) : String(error);
     
     const isQuotaError = errString.includes('429') || 
                          errString.includes('RESOURCE_EXHAUSTED') || 
                          errString.includes('quota') ||
-                         (error?.status === 429) || 
-                         (error?.status === 503);
+                         (error?.status === 429);
 
     if (retries > 0 && isQuotaError) {
       console.warn(`Hết hạn mức. Đang thử lại sau ${delay/1000}s...`);
@@ -73,8 +92,11 @@ const getModelConfig = (mode: AppMode) => {
 };
 
 export const isolateProduct = async (sourceBase64: string, mode: AppMode = 'standard'): Promise<string> => {
-  // Luôn tạo instance mới trước khi call để lấy API_KEY mới nhất
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ 
+    apiKey: "PROXY_AUTH", 
+    requestOptions: { customFetch: customFetch as any } 
+  });
+  
   const config = getModelConfig(mode);
   const optimizedImage = await resizeImage(sourceBase64);
 
@@ -109,7 +131,11 @@ export const isolateProduct = async (sourceBase64: string, mode: AppMode = 'stan
 };
 
 export const compositeProduct = async (isolatedBase64: string, templateBase64: string, mode: AppMode = 'standard'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ 
+    apiKey: "PROXY_AUTH", 
+    requestOptions: { customFetch: customFetch as any } 
+  });
+  
   const config = getModelConfig(mode);
   const optimizedIso = await resizeImage(isolatedBase64);
   const optimizedTemp = await resizeImage(templateBase64);
@@ -144,7 +170,10 @@ export const compositeProduct = async (isolatedBase64: string, templateBase64: s
 };
 
 export const replaceBackground = async (imageBase64: string, userPrompt: string, mode: AppMode = 'standard', aspectRatio: string = '1:1'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ 
+    apiKey: "PROXY_AUTH", 
+    requestOptions: { customFetch: customFetch as any } 
+  });
   const baseConfig = getModelConfig(mode);
   const optimizedImage = await resizeImage(imageBase64);
 
@@ -182,7 +211,10 @@ export const replaceBackground = async (imageBase64: string, userPrompt: string,
 };
 
 export const replaceBackgroundWithImage = async (subjectBase64: string, bgBase64: string, mode: AppMode = 'standard', aspectRatio: string = '1:1'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ 
+    apiKey: "PROXY_AUTH", 
+    requestOptions: { customFetch: customFetch as any } 
+  });
   const baseConfig = getModelConfig(mode);
   const optimizedSubject = await resizeImage(subjectBase64);
   const optimizedBg = await resizeImage(bgBase64);
@@ -221,70 +253,14 @@ export const replaceBackgroundWithImage = async (subjectBase64: string, bgBase64
   });
 };
 
-export const suggestBackgroundIdeas = async (base64Image: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const canvas = document.createElement('canvas');
-  const img = new Image();
-  img.src = base64Image;
-  await new Promise(r => img.onload = r);
-  canvas.width = 512;
-  canvas.height = 512 * (img.height / img.width);
-  const ctx = canvas.getContext('2d');
-  ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const optimizedImage = canvas.toDataURL('image/jpeg', 0.8);
-
-  return retryOperation(async () => {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { data: optimizedImage.split(',')[1], mimeType: 'image/jpeg' } },
-          { text: `Analyze outfit. Suggest ONE matching realistic background. Max 20 words.` }
-        ]
-      }
-    });
-    return response.text?.trim() || "A luxury modern studio background";
-  });
-};
-
-export const suggestVideoPrompt = async (base64Image: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const canvas = document.createElement('canvas');
-  const img = new Image();
-  img.src = base64Image;
-  await new Promise(r => img.onload = r);
-  canvas.width = 512;
-  canvas.height = 512 * (img.height / img.width);
-  const ctx = canvas.getContext('2d');
-  ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const optimizedImage = canvas.toDataURL('image/jpeg', 0.8);
-
-  return retryOperation(async () => {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { data: optimizedImage.split(',')[1], mimeType: 'image/jpeg' } },
-          { text: "Write a high-quality, cinematic text prompt for Veo video generation based on this image." }
-        ]
-      }
-    });
-    return response.text || "Cinematic product showcase.";
-  });
-};
-
-interface VideoConfig {
-  resolution: '720p' | '1080p';
-  aspectRatio: '16:9' | '9:16';
-  mode: AppMode;
-  prompt: string;
-}
-
 export const generateSalesVideo = async (
   imageParams: { base64: string, mimeType: string },
   config: VideoConfig
 ) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ 
+    apiKey: "PROXY_AUTH", 
+    requestOptions: { customFetch: customFetch as any } 
+  });
   const modelName = config.mode === 'premium' ? 'veo-3.1-generate-preview' : 'veo-3.1-fast-generate-preview';
   const optimizedImage = await resizeImage(imageParams.base64);
 
@@ -305,3 +281,10 @@ export const generateSalesVideo = async (
   const blob = await response.blob();
   return URL.createObjectURL(blob);
 };
+
+interface VideoConfig {
+  resolution: '720p' | '1080p';
+  aspectRatio: '16:9' | '9:16';
+  mode: AppMode;
+  prompt: string;
+}
