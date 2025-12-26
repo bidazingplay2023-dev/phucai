@@ -1,8 +1,5 @@
 {
-  "name": "Phúc Nguyễn AI Studio",
-  "description": "Bộ công cụ AI thương mại điện tử chuyên nghiệp: Thử đồ thông minh, Kiến trúc bối cảnh và Sản xuất Video.",
-  "requestFramePermissions": [
-    "camera",
-    "microphone"
-  ]
+  "name": "Lumina AI Studio",
+  "description": "Professional AI E-commerce Video Creator with Virtual Fit, Scene Magic, and Cinematic Video generation.",
+  "requestFramePermissions": []
 }

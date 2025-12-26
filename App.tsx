@@ -1,78 +1,69 @@
 import React, { useState, useEffect } from 'react';
-import { NavTab } from './types';
-import { Layout } from './components/Layout';
-import { TryOnFeature } from './components/TryOnFeature';
-import { BackgroundFeature } from './components/BackgroundFeature';
-import { VideoFeature } from './components/VideoFeature';
-import { Settings } from './components/Settings';
+import { AppTab } from './types';
+import MobileLayout from './components/MobileLayout';
+import DesktopLayout from './components/DesktopLayout';
+import { VirtualFit } from './features/VirtualFit';
+import { SceneMagic } from './features/SceneMagic';
+import { CinematicVideo } from './features/CinematicVideo';
+import { useApiKey } from './context/ApiKeyContext';
+import { LogOut } from 'lucide-react';
 
-const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<NavTab>(NavTab.TRY_ON);
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  
-  // Toast State
-  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+const SettingsView = () => {
+  const { clearKey, apiKey } = useApiKey();
+  return (
+    <div className="p-6 space-y-6">
+      <h2 className="text-2xl font-bold text-white">Settings</h2>
+      <div className="bg-lumina-surface p-4 rounded-xl border border-gray-700">
+        <h3 className="text-lg font-medium text-white mb-2">API Key Management</h3>
+        <p className="text-sm text-lumina-muted mb-4">
+          Your key is stored in your browser's Local Storage.
+        </p>
+        <div className="flex items-center justify-between bg-black/30 p-3 rounded-lg border border-gray-800 mb-4">
+             <code className="text-xs text-gray-400 font-mono">
+                {apiKey ? `${apiKey.substring(0, 8)}...${apiKey.substring(apiKey.length - 4)}` : 'No Key Found'}
+             </code>
+        </div>
+        <button 
+            onClick={clearKey}
+            className="flex items-center gap-2 px-4 py-2 bg-red-900/30 text-red-400 border border-red-900 rounded-lg hover:bg-red-900/50 transition-colors text-sm"
+        >
+            <LogOut className="w-4 h-4" />
+            Remove Key & Reset
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState<AppTab>(AppTab.VIRTUAL_FIT);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   useEffect(() => {
-    // Load API Key from local storage on mount
-    const storedKey = localStorage.getItem('GEMINI_API_KEY');
-    if (storedKey) {
-      setApiKey(storedKey);
-    }
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
-
-  const saveApiKey = (key: string) => {
-    setApiKey(key);
-    localStorage.setItem('GEMINI_API_KEY', key);
-    showToast("Đã lưu API Key thành công!", 'success');
-  };
-
-  const clearApiKey = () => {
-    setApiKey(null);
-    localStorage.removeItem('GEMINI_API_KEY');
-    showToast("Đã xóa API Key.", 'success');
-  };
-
-  const showToast = (msg: string, type: 'success' | 'error') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
-  };
 
   const renderContent = () => {
     switch (activeTab) {
-      case NavTab.TRY_ON:
-        return <TryOnFeature apiKey={apiKey} onError={(m) => showToast(m, 'error')} onSuccess={(m) => showToast(m, 'success')} />;
-      case NavTab.BACKGROUND:
-        return <BackgroundFeature apiKey={apiKey} onError={(m) => showToast(m, 'error')} onSuccess={(m) => showToast(m, 'success')} />;
-      case NavTab.VIDEO:
-        return <VideoFeature apiKey={apiKey} onError={(m) => showToast(m, 'error')} onSuccess={(m) => showToast(m, 'success')} />;
-      case NavTab.SETTINGS:
-        return <Settings apiKey={apiKey} onSaveKey={saveApiKey} onClearKey={clearApiKey} />;
-      default:
-        return <TryOnFeature apiKey={apiKey} onError={(m) => showToast(m, 'error')} onSuccess={(m) => showToast(m, 'success')} />;
+      case AppTab.VIRTUAL_FIT: return <VirtualFit />;
+      case AppTab.SCENE_MAGIC: return <SceneMagic />;
+      case AppTab.CINEMATIC_VIDEO: return <CinematicVideo />;
+      case AppTab.SETTINGS: return <SettingsView />;
+      default: return <VirtualFit />;
     }
   };
 
-  return (
-    <Layout activeTab={activeTab} onTabChange={setActiveTab}>
-      {/* Tab Content */}
-      <div className="animate-fade-in">
-        {renderContent()}
-      </div>
+  const Layout = isMobile ? MobileLayout : DesktopLayout;
 
-      {/* Toast Notification */}
-      {toast && (
-        <div 
-          className={`fixed top-4 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-full shadow-2xl z-[60] flex items-center gap-2 animate-bounce-in ${
-            toast.type === 'error' ? 'bg-red-500 text-white' : 'bg-emerald-500 text-white'
-          }`}
-        >
-          <span>{toast.type === 'error' ? '⚠️' : '✅'}</span>
-          <span className="font-medium text-sm">{toast.msg}</span>
-        </div>
-      )}
+  return (
+    <Layout currentTab={activeTab} onTabChange={setActiveTab}>
+      <div className="animate-fade-in">
+         {renderContent()}
+      </div>
     </Layout>
   );
-};
+}
 
 export default App;

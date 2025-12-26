@@ -1,5 +1,5 @@
 {
-  "name": "phúc-nguyễn-ai-studio",
+  "name": "lumina-ai-studio",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,8 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react-dom": "^19.2.3",
+    "lucide-react": "^0.562.0",
     "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "framer-motion": "12.4.2",
     "@google/genai": "^1.34.0"
   },
   "devDependencies": {
