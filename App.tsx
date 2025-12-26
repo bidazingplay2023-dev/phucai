@@ -10,10 +10,15 @@ import {
   Check, 
   AlertTriangle, 
   Download,
-  Loader2
+  Loader2,
+  Settings,
+  X,
+  ShieldCheck,
+  Zap
 } from 'lucide-react';
 import ImageUploader from './components/ImageUploader.tsx';
 import { isolateProduct, compositeProduct, generateSalesVideo, replaceBackground, replaceBackgroundWithImage } from './services/geminiService.ts';
+import { GoogleGenAI } from "@google/genai";
 
 interface AIStudio {
   hasSelectedApiKey: () => Promise<boolean>;
@@ -39,6 +44,8 @@ type TabId = 1 | 2 | 3 | 4;
 const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('standard'); 
   const [activeTab, setActiveTab] = useState<TabId>(1);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   
   const [productImg, setProductImg] = useState<string | null>(null); 
   const [isolatedImg, setIsolatedImg] = useState<string | null>(null); 
@@ -93,18 +100,31 @@ const App: React.FC = () => {
       await ((window as any).aistudio as AIStudio).openSelectKey();
       setHasApiKey(true);
       setError(null);
-    } else {
-        alert("Vui lòng cấu hình GEMINI_API_KEY trong file .env.local nếu chạy cục bộ.");
     }
   };
 
   const ensureApiKey = async () => {
     const active = await checkApiKey();
     if (!active) {
-      await handleOpenKeySelector();
-      return true; 
+      setIsSettingsOpen(true);
+      return false; 
     }
     return true;
+  };
+
+  const handleTestConnection = async () => {
+    setTestStatus('testing');
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: 'Kết nối ổn định chứ?',
+      });
+      if (response.text) setTestStatus('success');
+      else setTestStatus('error');
+    } catch (e) {
+      setTestStatus('error');
+    }
   };
 
   const handleError = async (err: any, isVideo = false) => {
@@ -118,8 +138,8 @@ const App: React.FC = () => {
         setError("⚠️ Quá tải: Vui lòng thử lại sau giây lát.");
     } else if (msg.includes("403") || msg.includes("PERMISSION_DENIED") || msg.includes("Requested entity was not found")) {
         setHasApiKey(false);
-        setError("⚠️ Lỗi xác thực/Thanh toán: Vui lòng chọn lại API Key.");
-        await handleOpenKeySelector();
+        setError("⚠️ Lỗi xác thực: Vui lòng kiểm tra lại API Key.");
+        setIsSettingsOpen(true);
     } else {
        setError(`Lỗi: ${msg.substring(0, 100)}...`);
     }
@@ -133,7 +153,7 @@ const App: React.FC = () => {
       const result = await isolateProduct(productImg, appMode);
       setIsolatedImg(result); 
       setStep2InputImg(result);
-      if (window.innerWidth >= 768) setActiveTab(2); // Auto switch on desktop
+      if (window.innerWidth >= 768) setActiveTab(2); 
     } catch (err: any) { handleError(err); } finally { setLoading(false); }
   };
 
@@ -188,16 +208,20 @@ const App: React.FC = () => {
     return null;
   }, [activeTab, videoUrl, bgReplacedImg, finalImg, isolatedImg, productImg, step2InputImg, step3InputImg, step4InputImg]);
 
-  // --- Sub-components for Cleaner Code ---
-
   const HeaderControls = () => (
-    <div className="flex items-center gap-3">
-        <button onClick={() => setAppMode(m => m === 'standard' ? 'premium' : 'standard')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${appMode === 'premium' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-800 text-slate-400'}`}>
-            <Sparkles size={12} />
+    <div className="flex items-center gap-2">
+        <button 
+          onClick={() => setAppMode(m => m === 'standard' ? 'premium' : 'standard')} 
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold transition-all min-h-[44px] ${appMode === 'premium' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-800 text-slate-400'}`}
+        >
+            <Sparkles size={14} />
             {appMode === 'premium' ? 'PRO' : 'FREE'}
         </button>
-        <button onClick={handleOpenKeySelector} className={`p-2 rounded-full transition-colors ${hasApiKey ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400 animate-pulse'}`}>
-             <Key size={16} />
+        <button 
+          onClick={() => setIsSettingsOpen(true)} 
+          className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors"
+        >
+             <Settings size={20} />
         </button>
     </div>
   );
@@ -211,9 +235,7 @@ const App: React.FC = () => {
             </div>
         )
     }
-
     if (!preview) return null;
-
     return (
         <div className={`relative z-10 w-full rounded-xl overflow-hidden shadow-2xl border border-white/10 ${isMobile ? 'mb-6 aspect-square' : 'max-h-[75vh] max-w-full'}`}>
              <div className="absolute inset-0 z-0" style={CHECKERBOARD_STYLE}></div>
@@ -222,8 +244,6 @@ const App: React.FC = () => {
              ) : (
                 <img src={preview.src} alt="Preview" className="relative z-10 w-full h-full object-contain" />
              )}
-             
-             {/* Download Overlay */}
              <a 
                 href={preview.src} 
                 download={`pn-studio-${Date.now()}`}
@@ -247,7 +267,7 @@ const App: React.FC = () => {
                 <button 
                     onClick={handleIsolate} 
                     disabled={!productImg || loading} 
-                    className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 touch-manipulation"
+                    className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 min-h-[44px] flex items-center justify-center gap-2 touch-manipulation"
                 >
                     {loading ? <Loader2 className="animate-spin" /> : <Scissors size={18} />}
                     <span>Tách nền ngay</span>
@@ -268,7 +288,7 @@ const App: React.FC = () => {
                 <button 
                     onClick={handleComposite} 
                     disabled={!step2InputImg || !templateImg || loading} 
-                    className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 flex items-center justify-center gap-2 touch-manipulation"
+                    className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 min-h-[44px] flex items-center justify-center gap-2 touch-manipulation"
                 >
                     {loading ? <Loader2 className="animate-spin" /> : <Shirt size={18} />}
                     <span>Ghép lên mẫu</span>
@@ -282,18 +302,17 @@ const App: React.FC = () => {
                     <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">Bước 3: Bối cảnh</h3>
                     {bgReplacedImg && <Check size={16} className="text-emerald-400" />}
                 </div>
-                
                 <div className="p-4 bg-slate-900/50 rounded-xl space-y-4 border border-white/5">
                     <textarea 
                         value={bgPrompt} 
                         onChange={e => setBgPrompt(e.target.value)} 
-                        placeholder="Mô tả bối cảnh mong muốn (Ví dụ: Trên bàn gỗ sồi, ánh sáng nắng sớm...)" 
+                        placeholder="Mô tả bối cảnh mong muốn..." 
                         className="w-full h-24 bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
                     />
                     <button 
                         onClick={handleReplaceBackground} 
                         disabled={loading || !step3InputImg} 
-                        className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 flex items-center justify-center gap-2 touch-manipulation"
+                        className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 min-h-[44px] flex items-center justify-center gap-2 touch-manipulation"
                     >
                         {loading ? <Loader2 className="animate-spin" /> : <ImageIcon size={18} />}
                         <span>Tạo bối cảnh</span>
@@ -312,7 +331,7 @@ const App: React.FC = () => {
                 <button 
                     onClick={handleGenerateVideo} 
                     disabled={loading || !step4InputImg} 
-                    className="w-full py-4 bg-gradient-to-r from-pink-600 to-indigo-600 rounded-xl font-bold shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 touch-manipulation"
+                    className="w-full py-4 bg-gradient-to-r from-pink-600 to-indigo-600 rounded-xl font-bold shadow-lg disabled:opacity-50 min-h-[44px] flex items-center justify-center gap-2 touch-manipulation"
                 >
                     {loading ? <Loader2 className="animate-spin" /> : <Video size={18} />}
                     <span>Render Video (Veo)</span>
@@ -324,21 +343,96 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-[#020617] text-slate-200 overflow-hidden font-sans">
-      {/* Background Ambience */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] rounded-full bg-indigo-900/10 blur-[100px]"></div>
         <div className="absolute top-[40%] -right-[10%] w-[50%] h-[50%] rounded-full bg-violet-900/10 blur-[100px]"></div>
       </div>
 
-      {/* --- MOBILE LAYOUT (< md) --- */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-white/5 flex items-center justify-between bg-slate-800/50">
+                <div className="flex items-center gap-2">
+                  <Settings size={18} className="text-indigo-400" />
+                  <h2 className="font-bold text-lg">Cài đặt hệ thống</h2>
+                </div>
+                <button 
+                  onClick={() => setIsSettingsOpen(false)} 
+                  className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-400 hover:text-white"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6">
+                <section className="space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                    <Key size={16} /> Quản lý API Key (BYOK)
+                  </div>
+                  <p className="text-xs text-slate-400">Kết nối API Key cá nhân của bạn để sử dụng các tính năng cao cấp từ Google Gemini & Veo.</p>
+                  
+                  <div className={`p-4 rounded-xl border transition-all ${hasApiKey ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-bold uppercase tracking-wider">Trạng thái Key</span>
+                      {hasApiKey ? (
+                        <span className="flex items-center gap-1 text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-bold">
+                          <ShieldCheck size={10} /> ĐÃ KẾT NỐI
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-bold">
+                          <AlertTriangle size={10} /> CHƯA CÓ KEY
+                        </span>
+                      )}
+                    </div>
+                    
+                    <button 
+                      onClick={handleOpenKeySelector}
+                      className="w-full py-3 bg-white text-slate-900 rounded-lg font-bold text-sm hover:bg-slate-200 transition-colors min-h-[44px]"
+                    >
+                      {hasApiKey ? 'Thay đổi API Key' : 'Chọn API Key'}
+                    </button>
+                  </div>
+                </section>
+
+                <section className="space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                    <Zap size={16} /> Kiểm tra hạ tầng
+                  </div>
+                  <button 
+                    onClick={handleTestConnection}
+                    disabled={testStatus === 'testing'}
+                    className={`w-full py-3 border border-slate-700 rounded-lg font-bold text-sm flex items-center justify-center gap-2 min-h-[44px] ${testStatus === 'testing' ? 'opacity-50' : 'hover:bg-slate-800'}`}
+                  >
+                    {testStatus === 'testing' ? <Loader2 className="animate-spin" size={16} /> : <Zap size={16} />}
+                    {testStatus === 'success' ? 'Kết nối OK!' : testStatus === 'error' ? 'Lỗi kết nối' : 'Kiểm tra kết nối'}
+                  </button>
+                </section>
+              </div>
+
+              <div className="p-4 bg-slate-950/50 border-t border-white/5 text-center">
+                <p className="text-[10px] text-slate-500">Phúc Nguyễn AI Studio v1.0.0 • BYOK Architecture</p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="md:hidden flex flex-col w-full h-full relative z-10">
-        {/* Mobile Header */}
         <header className="h-16 flex items-center justify-between px-4 border-b border-white/5 bg-slate-900/80 backdrop-blur-md">
             <div className="font-bold text-white text-base tracking-tight">Phúc Nguyễn AI</div>
             <HeaderControls />
         </header>
-
-        {/* Mobile Content Area (Stack: Preview -> Controls) */}
         <main className="flex-1 overflow-y-auto custom-scrollbar p-4 pb-24">
             <AnimatePresence mode="wait">
                 <motion.div 
@@ -349,16 +443,11 @@ const App: React.FC = () => {
                     transition={{ duration: 0.2 }}
                 >
                    {error && <div className="mb-4 p-3 bg-red-950/50 border border-red-500/30 rounded-lg flex items-center gap-2 text-red-200 text-xs"><AlertTriangle size={16} /> {error}</div>}
-                   
-                   {/* Combined Preview & Controls for Mobile Context */}
                    <PreviewSection isMobile />
                    <ControlsContent />
-
                 </motion.div>
             </AnimatePresence>
         </main>
-
-        {/* Mobile Fixed Bottom Nav */}
         <nav className="fixed bottom-0 left-0 w-full bg-slate-900/90 backdrop-blur-xl border-t border-white/5 flex justify-around items-center px-2 py-2 pb-safe z-50">
             {[
                 { id: 1, icon: Scissors, label: "Tách" },
@@ -369,7 +458,7 @@ const App: React.FC = () => {
                 <button 
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id as TabId)}
-                    className={`flex flex-col items-center justify-center p-2 rounded-xl w-16 h-16 transition-all ${activeTab === tab.id ? 'text-indigo-400 bg-indigo-500/10' : 'text-slate-500 hover:text-slate-300'}`}
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl w-16 h-16 transition-all min-h-[44px] min-w-[44px] ${activeTab === tab.id ? 'text-indigo-400 bg-indigo-500/10' : 'text-slate-500 hover:text-slate-300'}`}
                 >
                     <tab.icon size={24} strokeWidth={activeTab === tab.id ? 2.5 : 2} />
                     <span className="text-[10px] font-medium mt-1">{tab.label}</span>
@@ -378,10 +467,7 @@ const App: React.FC = () => {
         </nav>
       </div>
 
-      {/* --- DESKTOP LAYOUT (>= md) --- */}
       <div className="hidden md:flex w-full h-full relative z-10">
-        
-        {/* Sidebar */}
         <aside className="w-[380px] lg:w-[420px] h-full flex flex-col border-r border-slate-800/50 bg-slate-900/60 backdrop-blur-2xl shadow-2xl z-20">
             <div className="px-6 py-5 border-b border-white/5 flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -392,21 +478,18 @@ const App: React.FC = () => {
                 </div>
                 <HeaderControls />
             </div>
-
             <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-                 {/* Desktop Tabs as Accordion or Just Buttons to switch view */}
                  <div className="grid grid-cols-4 gap-2 mb-8 bg-slate-950/50 p-1 rounded-xl">
                     {[1,2,3,4].map(id => (
                         <button 
                             key={id}
                             onClick={() => setActiveTab(id as TabId)}
-                            className={`py-2 rounded-lg text-xs font-bold transition-all ${activeTab === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                            className={`py-2 rounded-lg text-xs font-bold transition-all min-h-[44px] ${activeTab === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                         >
                             Bước {id}
                         </button>
                     ))}
                  </div>
-
                  <AnimatePresence mode="wait">
                     <motion.div
                         key={activeTab}
@@ -418,12 +501,9 @@ const App: React.FC = () => {
                          <ControlsContent />
                     </motion.div>
                  </AnimatePresence>
-
                  {error && <div className="mt-6 p-4 bg-red-950/80 border border-red-500/30 rounded-xl text-red-200 text-xs flex gap-2"><AlertTriangle size={16} /> {error}</div>}
             </div>
         </aside>
-
-        {/* Main Preview Area */}
         <main className="flex-1 flex flex-col min-w-0 bg-[#020617]/50">
             <div className="h-16 border-b border-white/5 flex items-center justify-between px-8 bg-slate-900/30 backdrop-blur-md">
                  <div className="text-sm font-medium text-slate-300 flex items-center gap-2">
@@ -431,14 +511,12 @@ const App: React.FC = () => {
                      {loading ? <span className="animate-pulse">{loadingMsg}</span> : 'Studio Preview'}
                  </div>
             </div>
-            
             <div className="flex-1 flex items-center justify-center p-12 relative overflow-hidden">
                <div className="absolute inset-0 z-0" style={CHECKERBOARD_STYLE}></div>
                <PreviewSection />
             </div>
         </main>
       </div>
-
     </div>
   );
 };
