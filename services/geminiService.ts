@@ -2,10 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 
 type AppMode = 'standard' | 'premium';
 
-// Cập nhật URL chính xác từ ảnh chụp màn hình của bạn
-const PROXY_URL = "https://gemini-proxy-api.coha.workers.dev"; 
-
-// --- HELPER: Resize ảnh ---
+// --- HELPER: Resize image to fit within API limits if necessary ---
 const resizeImage = (base64Str: string, maxWidth = 4096): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -36,28 +33,7 @@ const resizeImage = (base64Str: string, maxWidth = 4096): Promise<string> => {
   });
 };
 
-// --- Custom Fetch cho SDK ---
-const customFetch = async (url: string, options: any) => {
-  // Chuyển hướng request qua Cloudflare Worker
-  const proxyUrl = url.replace("https://generativelanguage.googleapis.com", PROXY_URL);
-  
-  // Lấy key từ process.env.API_KEY (được lưu từ modal settings)
-  const apiKey = process.env.API_KEY || "";
-  
-  const newOptions = {
-    ...options,
-    headers: {
-      ...options.headers,
-      "X-Gemini-Key": apiKey, // Gửi key qua header bảo mật
-    }
-  };
-  
-  const finalUrl = new URL(proxyUrl);
-  finalUrl.searchParams.delete("key"); // Xóa key khỏi URL để tránh lộ log
-  
-  return fetch(finalUrl.toString(), newOptions);
-};
-
+// Retry logic for 429 errors
 async function retryOperation<T>(operation: () => Promise<T>, retries = 3, delay = 5000): Promise<T> {
   try {
     return await operation();
@@ -70,7 +46,7 @@ async function retryOperation<T>(operation: () => Promise<T>, retries = 3, delay
                          (error?.status === 429);
 
     if (retries > 0 && isQuotaError) {
-      console.warn(`Hết hạn mức. Đang thử lại sau ${delay/1000}s...`);
+      console.warn(`Quota exceeded. Retrying in ${delay/1000}s...`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return retryOperation(operation, retries - 1, delay * 2);
     }
@@ -87,16 +63,13 @@ const getModelConfig = (mode: AppMode) => {
   }
   return {
     model: 'gemini-2.5-flash-image',
-    imageConfig: undefined
+    imageConfig: { aspectRatio: "1:1" }
   };
 };
 
 export const isolateProduct = async (sourceBase64: string, mode: AppMode = 'standard'): Promise<string> => {
-  const ai = new GoogleGenAI({ 
-    apiKey: "PROXY_AUTH", 
-    requestOptions: { customFetch: customFetch as any } 
-  });
-  
+  // Use process.env.API_KEY directly and instantiate inside function for latest value
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
   const config = getModelConfig(mode);
   const optimizedImage = await resizeImage(sourceBase64);
 
@@ -121,21 +94,19 @@ export const isolateProduct = async (sourceBase64: string, mode: AppMode = 'stan
       config: { imageConfig: config.imageConfig as any }
     });
 
-    if (response.candidates?.[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
+    // Iterate parts to find the image part as per guidelines
+    const parts = response.candidates?.[0]?.content?.parts;
+    if (parts) {
+      for (const part of parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Không thể tách nền.`);
+    throw new Error(`Failed to isolate product.`);
   });
 };
 
 export const compositeProduct = async (isolatedBase64: string, templateBase64: string, mode: AppMode = 'standard'): Promise<string> => {
-  const ai = new GoogleGenAI({ 
-    apiKey: "PROXY_AUTH", 
-    requestOptions: { customFetch: customFetch as any } 
-  });
-  
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
   const config = getModelConfig(mode);
   const optimizedIso = await resizeImage(isolatedBase64);
   const optimizedTemp = await resizeImage(templateBase64);
@@ -160,25 +131,23 @@ export const compositeProduct = async (isolatedBase64: string, templateBase64: s
       config: { imageConfig: config.imageConfig as any }
     });
 
-    if (response.candidates?.[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
+    const parts = response.candidates?.[0]?.content?.parts;
+    if (parts) {
+      for (const part of parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Không thể ghép ảnh.`);
+    throw new Error(`Failed to composite image.`);
   });
 };
 
 export const replaceBackground = async (imageBase64: string, userPrompt: string, mode: AppMode = 'standard', aspectRatio: string = '1:1'): Promise<string> => {
-  const ai = new GoogleGenAI({ 
-    apiKey: "PROXY_AUTH", 
-    requestOptions: { customFetch: customFetch as any } 
-  });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
   const baseConfig = getModelConfig(mode);
   const optimizedImage = await resizeImage(imageBase64);
 
   const prompt = `
-  TASK: CINEMATIC BACKGROUND REPLACEMENT. Subject: ${userPrompt}.
+  TASK: CINEMATIC BACKGROUND REPLACEMENT. Subject description: ${userPrompt}.
   - Realistic shadows and grounding.
   - Lighting interaction with the new environment.
   - Sharp subject preservation.
@@ -201,26 +170,24 @@ export const replaceBackground = async (imageBase64: string, userPrompt: string,
       }
     });
 
-    if (response.candidates?.[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
+    const parts = response.candidates?.[0]?.content?.parts;
+    if (parts) {
+      for (const part of parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Không thể thay đổi bối cảnh.`);
+    throw new Error(`Failed to replace background.`);
   });
 };
 
 export const replaceBackgroundWithImage = async (subjectBase64: string, bgBase64: string, mode: AppMode = 'standard', aspectRatio: string = '1:1'): Promise<string> => {
-  const ai = new GoogleGenAI({ 
-    apiKey: "PROXY_AUTH", 
-    requestOptions: { customFetch: customFetch as any } 
-  });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
   const baseConfig = getModelConfig(mode);
   const optimizedSubject = await resizeImage(subjectBase64);
   const optimizedBg = await resizeImage(bgBase64);
 
   const prompt = `
-  TASK: EXPERT PHOTO COMPOSITING. Place subject 1 into background 2.
+  TASK: EXPERT PHOTO COMPOSITING. Place subject from image 1 into background from image 2.
   - Realistic contact and cast shadows.
   - Relighting to match color temperature.
   - Color harmony and light wrap.
@@ -244,12 +211,13 @@ export const replaceBackgroundWithImage = async (subjectBase64: string, bgBase64
       }
     });
 
-    if (response.candidates?.[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
+    const parts = response.candidates?.[0]?.content?.parts;
+    if (parts) {
+      for (const part of parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Không thể ghép nền mới.`);
+    throw new Error(`Failed to composite new background.`);
   });
 };
 
@@ -257,10 +225,7 @@ export const generateSalesVideo = async (
   imageParams: { base64: string, mimeType: string },
   config: VideoConfig
 ) => {
-  const ai = new GoogleGenAI({ 
-    apiKey: "PROXY_AUTH", 
-    requestOptions: { customFetch: customFetch as any } 
-  });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
   const modelName = config.mode === 'premium' ? 'veo-3.1-generate-preview' : 'veo-3.1-fast-generate-preview';
   const optimizedImage = await resizeImage(imageParams.base64);
 
@@ -277,7 +242,9 @@ export const generateSalesVideo = async (
   }
 
   const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+  // Always append API key when fetching from download link for Veo models as per guidelines
   const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+  if (!response.ok) throw new Error("Failed to download video file.");
   const blob = await response.blob();
   return URL.createObjectURL(blob);
 };
