@@ -60,8 +60,23 @@ async function retryOperation<T>(operation: () => Promise<T>, retries = 3, delay
   }
 }
 
-// Helper to init AI with dynamic key
-const getAI = (apiKey?: string) => new GoogleGenAI({ apiKey: apiKey || process.env.API_KEY || '' });
+// Helper to init AI with dynamic key and PROXY URL
+const getAI = (apiKey?: string) => {
+  const finalKey = apiKey || process.env.API_KEY || '';
+  const proxyUrl = localStorage.getItem('GEMINI_PROXY_URL');
+
+  // Cấu hình Base URL nếu người dùng đã nhập Proxy URL
+  // Nếu không có Proxy, SDK sẽ dùng mặc định (có thể bị chặn bởi CORS)
+  const config: any = { apiKey: finalKey };
+  
+  if (proxyUrl && proxyUrl.startsWith('http')) {
+    // Xóa dấu / ở cuối nếu có để tránh double slash
+    const cleanProxy = proxyUrl.replace(/\/$/, "");
+    config.baseUrl = cleanProxy;
+  }
+
+  return new GoogleGenAI(config);
+};
 
 const getModelConfig = (mode: AppMode) => {
   if (mode === 'premium') {
@@ -319,6 +334,11 @@ export const generateSalesVideo = async (
 
   const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
   const finalKey = apiKey || process.env.API_KEY;
+  
+  // Khi dùng Proxy, ta phải đảm bảo link download cũng đi qua proxy nếu cần,
+  // nhưng thường link download là GCS bucket public (signed url) nên có thể fetch trực tiếp.
+  // Tuy nhiên, việc fetch này cũng có thể bị chặn CORS.
+  // Tạm thời fetch trực tiếp, nếu lỗi thì cần proxy download riêng.
   const response = await fetch(`${downloadLink}&key=${finalKey}`);
   const blob = await response.blob();
   return URL.createObjectURL(blob);

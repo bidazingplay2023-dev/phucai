@@ -14,7 +14,8 @@ import {
   Loader2,
   Settings,
   X,
-  Save
+  Save,
+  Globe
 } from 'lucide-react';
 import ImageUploader from './components/ImageUploader.tsx';
 import { isolateProduct, compositeProduct, generateSalesVideo, replaceBackground, replaceBackgroundWithImage } from './services/geminiService.ts';
@@ -72,21 +73,30 @@ const App: React.FC = () => {
 
   // BYOK State
   const [apiKey, setApiKey] = useState<string>("");
+  const [proxyUrl, setProxyUrl] = useState<string>("");
   const [showSettings, setShowSettings] = useState(false);
   const [tempKey, setTempKey] = useState("");
+  const [tempProxy, setTempProxy] = useState("");
   const [isValidatingKey, setIsValidatingKey] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Load key from storage or env on mount
+    // Load key and proxy from storage
     const storedKey = localStorage.getItem('GEMINI_API_KEY');
+    const storedProxy = localStorage.getItem('GEMINI_PROXY_URL');
+    
     if (storedKey) {
         setApiKey(storedKey);
         setTempKey(storedKey);
     } else if (process.env.API_KEY) {
         setApiKey(process.env.API_KEY);
     } else {
-        setShowSettings(true); // Prompt user immediately if no key
+        setShowSettings(true); 
+    }
+
+    if (storedProxy) {
+        setProxyUrl(storedProxy);
+        setTempProxy(storedProxy);
     }
   }, []);
 
@@ -94,16 +104,23 @@ const App: React.FC = () => {
     setKeyError(null);
     setIsValidatingKey(true);
     try {
-        // Validation: Simple list call
-        const ai = new GoogleGenAI({ apiKey: tempKey });
-        // Just verify we can instantiate and maybe list models to prove key validity (optional)
-        // or just trust the user to save a round trip. 
-        // Let's do a lightweight check by just saving it. A real check happens on use.
+        // Basic validation
+        if (!tempKey) throw new Error("Key is missing");
+        
         localStorage.setItem('GEMINI_API_KEY', tempKey);
         setApiKey(tempKey);
+
+        if (tempProxy) {
+            localStorage.setItem('GEMINI_PROXY_URL', tempProxy);
+            setProxyUrl(tempProxy);
+        } else {
+            localStorage.removeItem('GEMINI_PROXY_URL');
+            setProxyUrl("");
+        }
+
         setShowSettings(false);
     } catch (e) {
-        setKeyError("API Key không hợp lệ.");
+        setKeyError("Cấu hình không hợp lệ.");
     } finally {
         setIsValidatingKey(false);
     }
@@ -127,8 +144,10 @@ const App: React.FC = () => {
     if (msg.includes("429") || msg.includes("quota")) {
         setError("⚠️ Quá tải: Vui lòng thử lại sau giây lát.");
     } else if (msg.includes("403") || msg.includes("PERMISSION_DENIED") || msg.includes("Requested entity was not found") || msg.includes("API key not valid")) {
-        setError("⚠️ Lỗi xác thực: Vui lòng kiểm tra lại API Key trong Cài đặt.");
+        setError("⚠️ Lỗi xác thực: Vui lòng kiểm tra lại API Key.");
         setShowSettings(true);
+    } else if (msg.includes("Failed to fetch")) {
+        setError("⚠️ Lỗi kết nối: Kiểm tra mạng hoặc cấu hình Proxy Cloudflare.");
     } else {
        setError(`Lỗi: ${msg.substring(0, 100)}...`);
     }
@@ -249,7 +268,6 @@ const App: React.FC = () => {
     <AnimatePresence>
         {showSettings && (
             <>
-                {/* Backdrop */}
                 <motion.div 
                     initial={{ opacity: 0 }} 
                     animate={{ opacity: 1 }} 
@@ -258,7 +276,6 @@ const App: React.FC = () => {
                     className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50"
                 />
                 
-                {/* Modal */}
                 <motion.div 
                     initial={{ y: "100%" }} 
                     animate={{ y: 0 }} 
@@ -277,6 +294,7 @@ const App: React.FC = () => {
                         </div>
 
                         <div className="space-y-4">
+                            {/* API KEY Input */}
                             <div className="space-y-2">
                                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Google Gemini API Key</label>
                                 <div className="relative">
@@ -290,10 +308,25 @@ const App: React.FC = () => {
                                     />
                                 </div>
                                 <p className="text-[10px] text-slate-500">
-                                    Key được lưu an toàn trong LocalStorage của trình duyệt. 
-                                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline ml-1">
-                                        Lấy Key tại đây
-                                    </a>
+                                    Key được lưu an toàn trong trình duyệt. <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-400 hover:underline">Lấy Key tại đây</a>.
+                                </p>
+                            </div>
+
+                            {/* Proxy URL Input */}
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Cloudflare Worker Proxy (Optional)</label>
+                                <div className="relative">
+                                    <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                                    <input 
+                                        type="text" 
+                                        value={tempProxy}
+                                        onChange={(e) => setTempProxy(e.target.value)}
+                                        placeholder="https://my-worker.subdomain.workers.dev"
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 pl-10 pr-4 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                                    />
+                                </div>
+                                <p className="text-[10px] text-slate-500">
+                                    Nhập URL Worker của bạn để tránh lỗi chặn IP/CORS trên website riêng.
                                 </p>
                             </div>
 
