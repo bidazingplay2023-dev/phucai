@@ -1,8 +1,7 @@
 {
-  "name": "Phúc Nguyễn AI Studio - Virtual Fitting",
-  "description": "Nền tảng thương mại điện tử AI cao cấp với tính năng thử đồ ảo (Virtual Fitting) sử dụng Gemini Flash Image, kiến trúc Edge Computing và giao diện Mobile-First.",
+  "name": "Phúc Nguyễn AI Studio",
+  "description": "Professional product isolation, background compositing, and cinematic video generation for e-commerce.",
   "requestFramePermissions": [
-    "camera",
-    "microphone"
+    "camera"
   ]
 }

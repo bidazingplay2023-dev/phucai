@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+// Quan trọng: Phải thêm đuôi .tsx khi chạy trực tiếp trên trình duyệt
+import App from './App.tsx';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
