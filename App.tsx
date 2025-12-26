@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import ImageUploader from './components/ImageUploader';
+import ImageUploader from './components/ImageUploader.tsx';
 import { 
   smartFitAI, 
   sceneArchitect, 
