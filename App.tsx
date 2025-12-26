@@ -1,6 +1,19 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Scissors, 
+  Shirt, 
+  Image as ImageIcon, 
+  Video, 
+  Key, 
+  Sparkles, 
+  Check, 
+  AlertTriangle, 
+  Download,
+  Loader2
+} from 'lucide-react';
 import ImageUploader from './components/ImageUploader.tsx';
-import { isolateProduct, compositeProduct, generateSalesVideo, suggestVideoPrompt, replaceBackground, replaceBackgroundWithImage, suggestBackgroundIdeas } from './services/geminiService.ts';
+import { isolateProduct, compositeProduct, generateSalesVideo, replaceBackground, replaceBackgroundWithImage } from './services/geminiService.ts';
 
 interface AIStudio {
   hasSelectedApiKey: () => Promise<boolean>;
@@ -21,10 +34,11 @@ const CHECKERBOARD_STYLE: React.CSSProperties = {
 };
 
 type AppMode = 'standard' | 'premium';
+type TabId = 1 | 2 | 3 | 4;
 
 const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('standard'); 
-  const [activeTab, setActiveTab] = useState<1 | 2 | 3 | 4>(1);
+  const [activeTab, setActiveTab] = useState<TabId>(1);
   
   const [productImg, setProductImg] = useState<string | null>(null); 
   const [isolatedImg, setIsolatedImg] = useState<string | null>(null); 
@@ -45,7 +59,6 @@ const App: React.FC = () => {
   const [customBgFile, setCustomBgFile] = useState<string | null>(null);
   const [bgAspectRatio, setBgAspectRatio] = useState<'1:1' | '16:9' | '9:16'>('1:1');
   const [bgPrompt, setBgPrompt] = useState<string>("");
-  const [isSuggestingBg, setIsSuggestingBg] = useState(false);
 
   const [videoResolution, setVideoResolution] = useState<'720p' | '1080p'>('1080p');
   const [videoAspectRatio, setVideoAspectRatio] = useState<'16:9' | '9:16'>('16:9');
@@ -53,16 +66,10 @@ const App: React.FC = () => {
   const [autoStyle, setAutoStyle] = useState<keyof typeof PRESET_STYLES>('cinematic');
   const [customPrompt, setCustomPrompt] = useState<string>("");
   
-  const [isSuggesting, setIsSuggesting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
-
-  const step1Ref = useRef<HTMLDivElement>(null);
-  const step2Ref = useRef<HTMLDivElement>(null);
-  const step3Ref = useRef<HTMLDivElement>(null);
-  const step4Ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     checkApiKey();
@@ -75,7 +82,7 @@ const App: React.FC = () => {
         setHasApiKey(selected);
         return selected;
       } else {
-        setHasApiKey(true); // Fallback for env variables
+        setHasApiKey(true); 
         return true;
       }
     } catch (e) { return false; }
@@ -84,7 +91,6 @@ const App: React.FC = () => {
   const handleOpenKeySelector = async () => {
     if ((window as any).aistudio) {
       await ((window as any).aistudio as AIStudio).openSelectKey();
-      // Assume selection successful as per guidelines
       setHasApiKey(true);
       setError(null);
     } else {
@@ -112,8 +118,7 @@ const App: React.FC = () => {
         setError("⚠️ Quá tải: Vui lòng thử lại sau giây lát.");
     } else if (msg.includes("403") || msg.includes("PERMISSION_DENIED") || msg.includes("Requested entity was not found")) {
         setHasApiKey(false);
-        setError("⚠️ Lỗi xác thực/Thanh toán: Vui lòng chọn lại API Key có hỗ trợ tính năng này.");
-        // Gợi ý mở lại dialog chọn key ngay lập tức nếu lỗi 403
+        setError("⚠️ Lỗi xác thực/Thanh toán: Vui lòng chọn lại API Key.");
         await handleOpenKeySelector();
     } else {
        setError(`Lỗi: ${msg.substring(0, 100)}...`);
@@ -128,7 +133,7 @@ const App: React.FC = () => {
       const result = await isolateProduct(productImg, appMode);
       setIsolatedImg(result); 
       setStep2InputImg(result);
-      setActiveTab(2);
+      if (window.innerWidth >= 768) setActiveTab(2); // Auto switch on desktop
     } catch (err: any) { handleError(err); } finally { setLoading(false); }
   };
 
@@ -140,7 +145,7 @@ const App: React.FC = () => {
       const result = await compositeProduct(step2InputImg, templateImg, appMode);
       setFinalImg(result);
       setStep3InputImg(result);
-      setActiveTab(3);
+      if (window.innerWidth >= 768) setActiveTab(3);
     } catch (err: any) { handleError(err); } finally { setLoading(false); }
   };
 
@@ -157,7 +162,7 @@ const App: React.FC = () => {
       }
       setBgReplacedImg(result);
       setStep4InputImg(result);
-      setActiveTab(4); 
+      if (window.innerWidth >= 768) setActiveTab(4); 
     } catch (err: any) { handleError(err); } finally { setLoading(false); }
   };
 
@@ -183,119 +188,257 @@ const App: React.FC = () => {
     return null;
   }, [activeTab, videoUrl, bgReplacedImg, finalImg, isolatedImg, productImg, step2InputImg, step3InputImg, step4InputImg]);
 
+  // --- Sub-components for Cleaner Code ---
+
+  const HeaderControls = () => (
+    <div className="flex items-center gap-3">
+        <button onClick={() => setAppMode(m => m === 'standard' ? 'premium' : 'standard')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${appMode === 'premium' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-800 text-slate-400'}`}>
+            <Sparkles size={12} />
+            {appMode === 'premium' ? 'PRO' : 'FREE'}
+        </button>
+        <button onClick={handleOpenKeySelector} className={`p-2 rounded-full transition-colors ${hasApiKey ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400 animate-pulse'}`}>
+             <Key size={16} />
+        </button>
+    </div>
+  );
+
+  const PreviewSection = ({ isMobile = false }: { isMobile?: boolean }) => {
+    if (!preview && !isMobile) {
+        return (
+            <div className="opacity-20 flex flex-col items-center">
+                <ImageIcon className="w-20 h-20 mb-4" />
+                <p className="text-sm">Vui lòng tải ảnh lên để bắt đầu</p>
+            </div>
+        )
+    }
+
+    if (!preview) return null;
+
+    return (
+        <div className={`relative z-10 w-full rounded-xl overflow-hidden shadow-2xl border border-white/10 ${isMobile ? 'mb-6 aspect-square' : 'max-h-[75vh] max-w-full'}`}>
+             <div className="absolute inset-0 z-0" style={CHECKERBOARD_STYLE}></div>
+             {preview.type === 'video' ? (
+                <video src={preview.src} controls autoPlay loop className="relative z-10 w-full h-full object-contain bg-black/50" />
+             ) : (
+                <img src={preview.src} alt="Preview" className="relative z-10 w-full h-full object-contain" />
+             )}
+             
+             {/* Download Overlay */}
+             <a 
+                href={preview.src} 
+                download={`pn-studio-${Date.now()}`}
+                className="absolute top-2 right-2 z-20 p-2 bg-black/60 backdrop-blur-md rounded-lg text-white hover:bg-indigo-600 transition-colors"
+             >
+                <Download size={16} />
+             </a>
+        </div>
+    );
+  };
+
+  const ControlsContent = () => (
+    <div className="space-y-6">
+        {activeTab === 1 && (
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">Bước 1: Tách nền</h3>
+                    {isolatedImg && <Check size={16} className="text-emerald-400" />}
+                </div>
+                <ImageUploader id="up-p" label="Ảnh sản phẩm gốc" image={productImg} onUpload={setProductImg} />
+                <button 
+                    onClick={handleIsolate} 
+                    disabled={!productImg || loading} 
+                    className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 touch-manipulation"
+                >
+                    {loading ? <Loader2 className="animate-spin" /> : <Scissors size={18} />}
+                    <span>Tách nền ngay</span>
+                </button>
+            </div>
+        )}
+
+        {activeTab === 2 && (
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">Bước 2: Thử đồ ảo</h3>
+                    {finalImg && <Check size={16} className="text-emerald-400" />}
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <ImageUploader id="up-s2" label="Sản phẩm" image={step2InputImg} onUpload={setStep2InputImg} compact />
+                    <ImageUploader id="up-t" label="Người mẫu" image={templateImg} onUpload={setTemplateImg} compact />
+                </div>
+                <button 
+                    onClick={handleComposite} 
+                    disabled={!step2InputImg || !templateImg || loading} 
+                    className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 flex items-center justify-center gap-2 touch-manipulation"
+                >
+                    {loading ? <Loader2 className="animate-spin" /> : <Shirt size={18} />}
+                    <span>Ghép lên mẫu</span>
+                </button>
+            </div>
+        )}
+
+        {activeTab === 3 && (
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider">Bước 3: Bối cảnh</h3>
+                    {bgReplacedImg && <Check size={16} className="text-emerald-400" />}
+                </div>
+                
+                <div className="p-4 bg-slate-900/50 rounded-xl space-y-4 border border-white/5">
+                    <textarea 
+                        value={bgPrompt} 
+                        onChange={e => setBgPrompt(e.target.value)} 
+                        placeholder="Mô tả bối cảnh mong muốn (Ví dụ: Trên bàn gỗ sồi, ánh sáng nắng sớm...)" 
+                        className="w-full h-24 bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                    />
+                    <button 
+                        onClick={handleReplaceBackground} 
+                        disabled={loading || !step3InputImg} 
+                        className="w-full py-4 bg-indigo-600 rounded-xl font-bold disabled:opacity-50 flex items-center justify-center gap-2 touch-manipulation"
+                    >
+                        {loading ? <Loader2 className="animate-spin" /> : <ImageIcon size={18} />}
+                        <span>Tạo bối cảnh</span>
+                    </button>
+                </div>
+            </div>
+        )}
+
+        {activeTab === 4 && (
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-pink-400 uppercase tracking-wider">Bước 4: Video Cinematic</h3>
+                    {videoUrl && <Check size={16} className="text-emerald-400" />}
+                </div>
+                <ImageUploader id="up-s4" label="Ảnh Keyframe" image={step4InputImg} onUpload={setStep4InputImg} compact />
+                <button 
+                    onClick={handleGenerateVideo} 
+                    disabled={loading || !step4InputImg} 
+                    className="w-full py-4 bg-gradient-to-r from-pink-600 to-indigo-600 rounded-xl font-bold shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 touch-manipulation"
+                >
+                    {loading ? <Loader2 className="animate-spin" /> : <Video size={18} />}
+                    <span>Render Video (Veo)</span>
+                </button>
+            </div>
+        )}
+    </div>
+  );
+
   return (
-    <div className="flex flex-col lg:flex-row h-screen bg-[#020617] text-slate-200 overflow-hidden font-sans">
+    <div className="flex h-screen bg-[#020617] text-slate-200 overflow-hidden font-sans">
+      {/* Background Ambience */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] rounded-full bg-indigo-900/10 blur-[100px]"></div>
         <div className="absolute top-[40%] -right-[10%] w-[50%] h-[50%] rounded-full bg-violet-900/10 blur-[100px]"></div>
       </div>
 
-      <aside className="order-2 lg:order-1 w-full lg:w-[420px] h-[60%] lg:h-full flex-shrink-0 flex flex-col border-t lg:border-t-0 lg:border-r border-slate-800/50 bg-slate-900/60 backdrop-blur-2xl relative z-20 shadow-2xl">
-        <div className="hidden lg:flex px-6 py-5 border-b border-white/5 items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/30">
-              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547" /></svg>
-            </div>
-            <div>
-              <h1 className="font-bold text-white text-lg">Phúc Nguyễn AI</h1>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setAppMode(m => m === 'standard' ? 'premium' : 'standard')} className={`text-[10px] font-bold px-2 py-0.5 rounded ${appMode === 'premium' ? 'bg-indigo-600' : 'bg-slate-800'}`}>{appMode === 'premium' ? 'PRO' : 'FREE'}</button>
-              </div>
-            </div>
-          </div>
-          <button onClick={handleOpenKeySelector} className={`flex items-center gap-2 p-2 rounded-lg transition-colors ${hasApiKey ? 'text-emerald-400 bg-emerald-400/10' : 'text-amber-400 bg-amber-400/10'}`}>
-             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
-             <span className="text-[10px] font-bold uppercase">{hasApiKey ? 'Đã kết nối' : 'Cần API Key'}</span>
-          </button>
-        </div>
+      {/* --- MOBILE LAYOUT (< md) --- */}
+      <div className="md:hidden flex flex-col w-full h-full relative z-10">
+        {/* Mobile Header */}
+        <header className="h-16 flex items-center justify-between px-4 border-b border-white/5 bg-slate-900/80 backdrop-blur-md">
+            <div className="font-bold text-white text-base tracking-tight">Phúc Nguyễn AI</div>
+            <HeaderControls />
+        </header>
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
-          <div className={`rounded-2xl border transition-all ${activeTab === 1 ? 'bg-slate-800/40 border-indigo-500/40' : 'border-white/5'}`}>
-            <button onClick={() => setActiveTab(1)} className="w-full p-4 flex items-center justify-between">
-              <span className="font-semibold text-sm">1. Tách nền (Clothing Isolation)</span>
-              {isolatedImg && <span className="text-emerald-400">✓</span>}
-            </button>
-            {activeTab === 1 && (
-              <div className="px-4 pb-4 space-y-4">
-                <ImageUploader id="up-p" label="Ảnh gốc" image={productImg} onUpload={setProductImg} />
-                <button onClick={handleIsolate} disabled={!productImg || loading} className="w-full py-3 bg-indigo-600 rounded-xl font-bold disabled:opacity-50">Tách nền</button>
-              </div>
-            )}
-          </div>
+        {/* Mobile Content Area (Stack: Preview -> Controls) */}
+        <main className="flex-1 overflow-y-auto custom-scrollbar p-4 pb-24">
+            <AnimatePresence mode="wait">
+                <motion.div 
+                    key={activeTab}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                >
+                   {error && <div className="mb-4 p-3 bg-red-950/50 border border-red-500/30 rounded-lg flex items-center gap-2 text-red-200 text-xs"><AlertTriangle size={16} /> {error}</div>}
+                   
+                   {/* Combined Preview & Controls for Mobile Context */}
+                   <PreviewSection isMobile />
+                   <ControlsContent />
 
-          <div className={`rounded-2xl border transition-all ${activeTab === 2 ? 'bg-slate-800/40 border-indigo-500/40' : 'border-white/5'}`}>
-            <button onClick={() => setActiveTab(2)} className="w-full p-4 flex items-center justify-between">
-              <span className="font-semibold text-sm">2. Thử đồ ảo (Virtual Try-On)</span>
-              {finalImg && <span className="text-emerald-400">✓</span>}
-            </button>
-            {activeTab === 2 && (
-              <div className="px-4 pb-4 space-y-4">
-                <ImageUploader id="up-s2" label="Sản phẩm" image={step2InputImg} onUpload={setStep2InputImg} compact />
-                <ImageUploader id="up-t" label="Người mẫu" image={templateImg} onUpload={setTemplateImg} compact />
-                <button onClick={handleComposite} disabled={!step2InputImg || !templateImg || loading} className="w-full py-3 bg-indigo-600 rounded-xl font-bold disabled:opacity-50">Ghép ảnh</button>
-              </div>
-            )}
-          </div>
+                </motion.div>
+            </AnimatePresence>
+        </main>
 
-          <div className={`rounded-2xl border transition-all ${activeTab === 3 ? 'bg-slate-800/40 border-indigo-500/40' : 'border-white/5'}`}>
-            <button onClick={() => setActiveTab(3)} className="w-full p-4 flex items-center justify-between">
-              <span className="font-semibold text-sm">3. Thay đổi bối cảnh</span>
-              {bgReplacedImg && <span className="text-emerald-400">✓</span>}
-            </button>
-            {activeTab === 3 && (
-              <div className="px-4 pb-4 space-y-4">
-                <div className="p-4 bg-slate-900/50 rounded-xl space-y-4 border border-white/5">
-                  <textarea value={bgPrompt} onChange={e => setBgPrompt(e.target.value)} placeholder="Mô tả bối cảnh..." className="w-full h-20 bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs" />
-                  <button onClick={handleReplaceBackground} disabled={loading || !step3InputImg} className="w-full py-3 bg-indigo-600 rounded-xl font-bold">Tạo bối cảnh</button>
+        {/* Mobile Fixed Bottom Nav */}
+        <nav className="fixed bottom-0 left-0 w-full bg-slate-900/90 backdrop-blur-xl border-t border-white/5 flex justify-around items-center px-2 py-2 pb-safe z-50">
+            {[
+                { id: 1, icon: Scissors, label: "Tách" },
+                { id: 2, icon: Shirt, label: "Ghép" },
+                { id: 3, icon: ImageIcon, label: "Nền" },
+                { id: 4, icon: Video, label: "Video" }
+            ].map((tab) => (
+                <button 
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id as TabId)}
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl w-16 h-16 transition-all ${activeTab === tab.id ? 'text-indigo-400 bg-indigo-500/10' : 'text-slate-500 hover:text-slate-300'}`}
+                >
+                    <tab.icon size={24} strokeWidth={activeTab === tab.id ? 2.5 : 2} />
+                    <span className="text-[10px] font-medium mt-1">{tab.label}</span>
+                </button>
+            ))}
+        </nav>
+      </div>
+
+      {/* --- DESKTOP LAYOUT (>= md) --- */}
+      <div className="hidden md:flex w-full h-full relative z-10">
+        
+        {/* Sidebar */}
+        <aside className="w-[380px] lg:w-[420px] h-full flex flex-col border-r border-slate-800/50 bg-slate-900/60 backdrop-blur-2xl shadow-2xl z-20">
+            <div className="px-6 py-5 border-b border-white/5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                        <Sparkles className="w-5 h-5 text-white" />
+                    </div>
+                    <h1 className="font-bold text-white text-lg">Phúc Nguyễn AI</h1>
                 </div>
-              </div>
-            )}
-          </div>
+                <HeaderControls />
+            </div>
 
-          <div className={`rounded-2xl border transition-all ${activeTab === 4 ? 'bg-slate-800/40 border-indigo-500/40' : 'border-white/5'}`}>
-            <button onClick={() => setActiveTab(4)} className="w-full p-4 flex items-center justify-between">
-              <span className="font-semibold text-sm">4. Sản xuất Video (Veo)</span>
-              {videoUrl && <span className="text-emerald-400">✓</span>}
-            </button>
-            {activeTab === 4 && (
-              <div className="px-4 pb-4 space-y-4">
-                <ImageUploader id="up-s4" label="Keyframe" image={step4InputImg} onUpload={setStep4InputImg} compact />
-                <button onClick={handleGenerateVideo} disabled={loading || !step4InputImg} className="w-full py-4 bg-gradient-to-r from-pink-600 to-indigo-600 rounded-xl font-bold shadow-lg">Render Video (Veo 3.1)</button>
-              </div>
-            )}
-          </div>
-        </div>
-        
-        {error && <div className="p-4 bg-red-950/80 border-t border-red-500/50 text-red-200 text-[10px] uppercase font-bold tracking-wider">{error}</div>}
-      </aside>
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+                 {/* Desktop Tabs as Accordion or Just Buttons to switch view */}
+                 <div className="grid grid-cols-4 gap-2 mb-8 bg-slate-950/50 p-1 rounded-xl">
+                    {[1,2,3,4].map(id => (
+                        <button 
+                            key={id}
+                            onClick={() => setActiveTab(id as TabId)}
+                            className={`py-2 rounded-lg text-xs font-bold transition-all ${activeTab === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                        >
+                            Bước {id}
+                        </button>
+                    ))}
+                 </div>
 
-      <main className="order-1 lg:order-2 flex-1 relative flex flex-col min-w-0">
-        <div className="h-14 border-b border-white/5 flex items-center justify-between px-6 bg-slate-900/30 backdrop-blur-md z-20">
-           <div className="text-sm font-medium text-slate-300">
-               {loading ? <span className="animate-pulse">{loadingMsg}</span> : 'Studio Preview'}
-           </div>
-           {preview && <button onClick={() => {
-              const link = document.createElement('a');
-              link.href = preview.src;
-              link.download = `pn-studio-${Date.now()}`;
-              link.click();
-           }} className="text-xs font-bold px-3 py-1.5 bg-indigo-600 rounded-lg">Tải xuống</button>}
-        </div>
-        
-        <div className="flex-1 relative flex items-center justify-center p-6 lg:p-12">
-           <div className="absolute inset-0 z-0" style={CHECKERBOARD_STYLE}></div>
-           {preview ? (
-             <div className="relative z-10 max-w-full max-h-full shadow-2xl rounded-xl overflow-hidden border border-white/10">
-                {preview.type === 'video' ? <video src={preview.src} controls autoPlay loop className="max-h-[75vh]" /> : <img src={preview.src} alt="Preview" className="max-h-[75vh]" />}
-             </div>
-           ) : (
-             <div className="opacity-20 flex flex-col items-center">
-                <svg className="w-20 h-20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                <p className="text-sm">Vui lòng tải ảnh lên để bắt đầu</p>
-             </div>
-           )}
-        </div>
-      </main>
+                 <AnimatePresence mode="wait">
+                    <motion.div
+                        key={activeTab}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 10 }}
+                        transition={{ duration: 0.2 }}
+                    >
+                         <ControlsContent />
+                    </motion.div>
+                 </AnimatePresence>
+
+                 {error && <div className="mt-6 p-4 bg-red-950/80 border border-red-500/30 rounded-xl text-red-200 text-xs flex gap-2"><AlertTriangle size={16} /> {error}</div>}
+            </div>
+        </aside>
+
+        {/* Main Preview Area */}
+        <main className="flex-1 flex flex-col min-w-0 bg-[#020617]/50">
+            <div className="h-16 border-b border-white/5 flex items-center justify-between px-8 bg-slate-900/30 backdrop-blur-md">
+                 <div className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                     {loading && <Loader2 className="animate-spin text-indigo-400" size={16} />}
+                     {loading ? <span className="animate-pulse">{loadingMsg}</span> : 'Studio Preview'}
+                 </div>
+            </div>
+            
+            <div className="flex-1 flex items-center justify-center p-12 relative overflow-hidden">
+               <div className="absolute inset-0 z-0" style={CHECKERBOARD_STYLE}></div>
+               <PreviewSection />
+            </div>
+        </main>
+      </div>
+
     </div>
   );
 };

@@ -1,4 +1,5 @@
 import React, { useCallback } from 'react';
+import { Upload, RefreshCw } from 'lucide-react';
 
 interface ImageUploaderProps {
   label: string;
@@ -39,8 +40,9 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ label, id, image, onUploa
             ${image 
               ? 'border-indigo-500/30 bg-slate-900/80 shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]' 
               : 'border-slate-700/50 border-dashed hover:border-indigo-500/50 bg-slate-800/20 hover:bg-slate-800/40'}
-            ${compact ? 'h-24 lg:h-32' : 'h-36 lg:h-52'}
+            ${compact ? 'h-28 lg:h-32' : 'h-44 lg:h-52'} 
           `}
+          // Increased height for better touch area on mobile
         >
           {image ? (
             <div className="relative w-full h-full p-2">
@@ -48,17 +50,15 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ label, id, image, onUploa
                 <img src={image} alt="Preview" className="w-full h-full object-contain" />
                 {/* Overlay hover effect */}
                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/label:opacity-100 flex flex-col items-center justify-center transition-opacity backdrop-blur-[2px]">
-                   <svg className="w-6 h-6 text-white mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                   <RefreshCw className="w-6 h-6 text-white mb-1" />
                    <span className="text-white text-[10px] font-bold uppercase tracking-wide">Thay đổi ảnh</span>
                 </div>
               </div>
             </div>
           ) : (
             <div className="flex flex-col items-center space-y-3 p-4 text-center group-hover/label:-translate-y-1 transition-transform duration-300">
-              <div className={`rounded-full bg-slate-800/80 ring-1 ring-white/10 flex items-center justify-center shadow-lg ${compact ? 'p-2' : 'p-3'}`}>
-                <svg className={`${compact ? 'w-4 h-4 lg:w-5 lg:h-5' : 'w-6 h-6 lg:w-7 lg:h-7'} text-slate-400 group-hover/label:text-indigo-400 transition-colors`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
+              <div className={`rounded-full bg-slate-800/80 ring-1 ring-white/10 flex items-center justify-center shadow-lg ${compact ? 'p-3' : 'p-4'}`}>
+                <Upload className={`${compact ? 'w-5 h-5' : 'w-7 h-7'} text-slate-400 group-hover/label:text-indigo-400 transition-colors`} />
               </div>
               {!compact && (
                 <div className="space-y-1">
