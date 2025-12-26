@@ -1,8 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
+
+import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 
 type AppMode = 'standard' | 'premium';
 
-// --- HELPER: Resize image to fit within API limits if necessary ---
+// --- HELPER: Resize ảnh ---
 const resizeImage = (base64Str: string, maxWidth = 4096): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -33,26 +34,34 @@ const resizeImage = (base64Str: string, maxWidth = 4096): Promise<string> => {
   });
 };
 
-// Retry logic for 429 errors
 async function retryOperation<T>(operation: () => Promise<T>, retries = 3, delay = 5000): Promise<T> {
   try {
     return await operation();
   } catch (error: any) {
-    let errString = typeof error === 'object' ? JSON.stringify(error) : String(error);
+    let errString = "";
+    if (typeof error === 'object') {
+        errString = JSON.stringify(error);
+    } else {
+        errString = String(error);
+    }
     
     const isQuotaError = errString.includes('429') || 
                          errString.includes('RESOURCE_EXHAUSTED') || 
                          errString.includes('quota') ||
-                         (error?.status === 429);
+                         (error?.status === 429) || 
+                         (error?.status === 503);
 
     if (retries > 0 && isQuotaError) {
-      console.warn(`Quota exceeded. Retrying in ${delay/1000}s...`);
+      console.warn(`Hết hạn mức. Đang thử lại sau ${delay/1000}s...`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return retryOperation(operation, retries - 1, delay * 2);
     }
     throw error;
   }
 }
+
+// Helper to init AI with dynamic key
+const getAI = (apiKey?: string) => new GoogleGenAI({ apiKey: apiKey || process.env.API_KEY || '' });
 
 const getModelConfig = (mode: AppMode) => {
   if (mode === 'premium') {
@@ -63,13 +72,12 @@ const getModelConfig = (mode: AppMode) => {
   }
   return {
     model: 'gemini-2.5-flash-image',
-    imageConfig: { aspectRatio: "1:1" }
+    imageConfig: undefined
   };
 };
 
-export const isolateProduct = async (sourceBase64: string, mode: AppMode = 'standard'): Promise<string> => {
-  // Use process.env.API_KEY directly and instantiate inside function for latest value
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+export const isolateProduct = async (sourceBase64: string, mode: AppMode = 'standard', apiKey?: string): Promise<string> => {
+  const ai = getAI(apiKey);
   const config = getModelConfig(mode);
   const optimizedImage = await resizeImage(sourceBase64);
 
@@ -94,28 +102,36 @@ export const isolateProduct = async (sourceBase64: string, mode: AppMode = 'stan
       config: { imageConfig: config.imageConfig as any }
     });
 
-    // Iterate parts to find the image part as per guidelines
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (parts) {
-      for (const part of parts) {
+    if (response.candidates?.[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Failed to isolate product.`);
+    throw new Error(`Không thể tách nền.`);
   });
 };
 
-export const compositeProduct = async (isolatedBase64: string, templateBase64: string, mode: AppMode = 'standard'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+export const compositeProduct = async (isolatedBase64: string, templateBase64: string, mode: AppMode = 'standard', apiKey?: string): Promise<string> => {
+  const ai = getAI(apiKey);
   const config = getModelConfig(mode);
   const optimizedIso = await resizeImage(isolatedBase64);
   const optimizedTemp = await resizeImage(templateBase64);
 
+  // Advanced System Instruction for Virtual Fitting (Consolidated Feature)
+  const systemInstruction = `
+    You are an expert AI Fashion Stylist and Image Compositor.
+    Your task is to perform a realistic "Virtual Try-On".
+    1. Analyze the texture, fabric, and lighting of the PRODUCT image.
+    2. Analyze the body pose, lighting, and perspective of the MODEL image.
+    3. WARP and DRAPE the product onto the model naturally.
+    4. GENERATE realistic shadows, folds, and contact points.
+    5. Maintain the identity of the model and the background.
+    6. Output only the final composited image.
+  `;
+
   const prompt = `
-      TASK: REALISTIC VIRTUAL TRY-ON. Apply the cloth from image 1 onto the model in image 2.
-      - Wrap naturally around body curves.
-      - Preserve cloth texture and model identity.
-      - Match lighting and shadows.
+      APPLY this product [Image 1] onto this model [Image 2].
+      Ensure high fidelity texture mapping and realistic lighting integration.
   `;
 
   return retryOperation(async () => {
@@ -128,26 +144,28 @@ export const compositeProduct = async (isolatedBase64: string, templateBase64: s
           { text: prompt }
         ]
       },
-      config: { imageConfig: config.imageConfig as any }
+      config: { 
+        imageConfig: config.imageConfig as any,
+        systemInstruction: systemInstruction
+      }
     });
 
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (parts) {
-      for (const part of parts) {
+    if (response.candidates?.[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Failed to composite image.`);
+    throw new Error(`Không thể ghép ảnh.`);
   });
 };
 
-export const replaceBackground = async (imageBase64: string, userPrompt: string, mode: AppMode = 'standard', aspectRatio: string = '1:1'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+export const replaceBackground = async (imageBase64: string, userPrompt: string, mode: AppMode = 'standard', aspectRatio: string = '1:1', apiKey?: string): Promise<string> => {
+  const ai = getAI(apiKey);
   const baseConfig = getModelConfig(mode);
   const optimizedImage = await resizeImage(imageBase64);
 
   const prompt = `
-  TASK: CINEMATIC BACKGROUND REPLACEMENT. Subject description: ${userPrompt}.
+  TASK: CINEMATIC BACKGROUND REPLACEMENT. Subject: ${userPrompt}.
   - Realistic shadows and grounding.
   - Lighting interaction with the new environment.
   - Sharp subject preservation.
@@ -170,24 +188,23 @@ export const replaceBackground = async (imageBase64: string, userPrompt: string,
       }
     });
 
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (parts) {
-      for (const part of parts) {
+    if (response.candidates?.[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Failed to replace background.`);
+    throw new Error(`Không thể thay đổi bối cảnh.`);
   });
 };
 
-export const replaceBackgroundWithImage = async (subjectBase64: string, bgBase64: string, mode: AppMode = 'standard', aspectRatio: string = '1:1'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+export const replaceBackgroundWithImage = async (subjectBase64: string, bgBase64: string, mode: AppMode = 'standard', aspectRatio: string = '1:1', apiKey?: string): Promise<string> => {
+  const ai = getAI(apiKey);
   const baseConfig = getModelConfig(mode);
   const optimizedSubject = await resizeImage(subjectBase64);
   const optimizedBg = await resizeImage(bgBase64);
 
   const prompt = `
-  TASK: EXPERT PHOTO COMPOSITING. Place subject from image 1 into background from image 2.
+  TASK: EXPERT PHOTO COMPOSITING. Place subject 1 into background 2.
   - Realistic contact and cast shadows.
   - Relighting to match color temperature.
   - Color harmony and light wrap.
@@ -211,21 +228,80 @@ export const replaceBackgroundWithImage = async (subjectBase64: string, bgBase64
       }
     });
 
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (parts) {
-      for (const part of parts) {
+    if (response.candidates?.[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error(`Failed to composite new background.`);
+    throw new Error(`Không thể ghép nền mới.`);
   });
 };
 
+export const suggestBackgroundIdeas = async (base64Image: string, apiKey?: string): Promise<string> => {
+  const ai = getAI(apiKey);
+  const canvas = document.createElement('canvas');
+  const img = new Image();
+  img.src = base64Image;
+  await new Promise(r => img.onload = r);
+  canvas.width = 512;
+  canvas.height = 512 * (img.height / img.width);
+  const ctx = canvas.getContext('2d');
+  ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const optimizedImage = canvas.toDataURL('image/jpeg', 0.8);
+
+  return retryOperation(async () => {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          { inlineData: { data: optimizedImage.split(',')[1], mimeType: 'image/jpeg' } },
+          { text: `Analyze outfit. Suggest ONE matching realistic background. Max 20 words.` }
+        ]
+      }
+    });
+    return response.text?.trim() || "A luxury modern studio background";
+  });
+};
+
+export const suggestVideoPrompt = async (base64Image: string, apiKey?: string): Promise<string> => {
+  const ai = getAI(apiKey);
+  const canvas = document.createElement('canvas');
+  const img = new Image();
+  img.src = base64Image;
+  await new Promise(r => img.onload = r);
+  canvas.width = 512;
+  canvas.height = 512 * (img.height / img.width);
+  const ctx = canvas.getContext('2d');
+  ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const optimizedImage = canvas.toDataURL('image/jpeg', 0.8);
+
+  return retryOperation(async () => {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          { inlineData: { data: optimizedImage.split(',')[1], mimeType: 'image/jpeg' } },
+          { text: "Write a high-quality, cinematic text prompt for Veo video generation based on this image." }
+        ]
+      }
+    });
+    return response.text || "Cinematic product showcase.";
+  });
+};
+
+interface VideoConfig {
+  resolution: '720p' | '1080p';
+  aspectRatio: '16:9' | '9:16';
+  mode: AppMode;
+  prompt: string;
+}
+
 export const generateSalesVideo = async (
   imageParams: { base64: string, mimeType: string },
-  config: VideoConfig
+  config: VideoConfig,
+  apiKey?: string
 ) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+  const ai = getAI(apiKey);
   const modelName = config.mode === 'premium' ? 'veo-3.1-generate-preview' : 'veo-3.1-fast-generate-preview';
   const optimizedImage = await resizeImage(imageParams.base64);
 
@@ -242,16 +318,8 @@ export const generateSalesVideo = async (
   }
 
   const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-  // Always append API key when fetching from download link for Veo models as per guidelines
-  const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-  if (!response.ok) throw new Error("Failed to download video file.");
+  const finalKey = apiKey || process.env.API_KEY;
+  const response = await fetch(`${downloadLink}&key=${finalKey}`);
   const blob = await response.blob();
   return URL.createObjectURL(blob);
 };
-
-interface VideoConfig {
-  resolution: '720p' | '1080p';
-  aspectRatio: '16:9' | '9:16';
-  mode: AppMode;
-  prompt: string;
-}
