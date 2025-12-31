@@ -1,11 +1,10 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { AppConfig, ProcessedImage } from "../types";
+import { compressImage } from "./utils";
 
-// CHANGE: Switch to 2.0 Flash Experimental. 
-// Reason: The 2.5-flash-image model currently enforces "Limit: 0" on accounts without Billing (Free Tier locked).
-// 2.0-flash-exp is more permissive for free testing.
+// Sử dụng model Flash Experimental - Model này hiện tại 'dễ tính' nhất với Free Tier
 const IMAGE_MODEL_NAME = 'gemini-2.0-flash-exp';
-const TEXT_MODEL_NAME = 'gemini-2.5-flash-latest';
+const TEXT_MODEL_NAME = 'gemini-2.0-flash-exp';
 
 // Disable Safety Settings
 const SAFETY_SETTINGS = [
@@ -45,15 +44,10 @@ const callWithRetry = async (apiCall: () => Promise<any>, retries = 3, delay = 2
     const isQuotaError = error.message?.includes("429") || error.message?.includes("Quota") || error.status === 429;
     const isOverloaded = error.message?.includes("503") || error.message?.includes("Overloaded");
     
-    // Check for "Limit: 0" specifically - this implies Billing Requirement, retrying won't fix it usually, but we try once.
-    const isZeroLimit = error.message?.includes("limit: 0");
-
-    if (isZeroLimit) {
-        throw new Error("BILLING_REQUIRED");
-    }
-
-    if ((isQuotaError || isOverloaded) && retries > 0) {
-      console.warn(`Gặp lỗi quá tải (429/503). Đang đợi ${delay}ms để thử lại... (Còn ${retries} lần)`);
+    // Nếu gặp lỗi Limit 0, thường do model bị kén vùng hoặc account mới
+    // Ta sẽ thử lại 1 lần nữa vì đôi khi nó chỉ là lỗi tạm thời của Google
+    if ((isQuotaError || isOverloaded || error.message?.includes("limit: 0")) && retries > 0) {
+      console.warn(`API bận, đang thử lại... (Còn ${retries} lần)`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return callWithRetry(apiCall, retries - 1, delay * 2);
     }
@@ -64,9 +58,13 @@ const callWithRetry = async (apiCall: () => Promise<any>, retries = 3, delay = 2
 export const isolateProductImage = async (productImageBase64: string): Promise<string> => {
   try {
     const ai = getClient();
+    
+    // QUAN TRỌNG: Nén ảnh xuống còn tối đa 800px để tiết kiệm Token Free Tier
+    const optimizedImage = await compressImage(productImageBase64, 800);
+
     const prompt = `
-      Nhiệm vụ: Chụp ảnh sản phẩm thương mại điện tử (E-commerce Product Photography).
-      Yêu cầu: Tách quần/áo ra khỏi nền. Đặt trên nền TRẮNG (#FFFFFF). Giữ nguyên chi tiết. Căn giữa.
+      Extract the clothing item from this image. Place it on a pure white background. 
+      Center it. Keep high detail.
     `;
 
     const response = await callWithRetry(async () => {
@@ -74,7 +72,7 @@ export const isolateProductImage = async (productImageBase64: string): Promise<s
         model: IMAGE_MODEL_NAME,
         contents: {
           parts: [
-            { inlineData: { mimeType: "image/png", data: productImageBase64 } },
+            { inlineData: { mimeType: "image/jpeg", data: optimizedImage } },
             { text: prompt }
           ]
         },
@@ -97,7 +95,6 @@ export const isolateProductImage = async (productImageBase64: string): Promise<s
   } catch (error: any) {
     console.error("Isolate Error:", error);
     const errMsg = error.message || "";
-    if (errMsg === "BILLING_REQUIRED") throw error;
     if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
         throw new Error("QUOTA_EXCEEDED");
     }
@@ -113,14 +110,18 @@ export const generateTryOnImage = async (
   try {
     const ai = getClient();
 
+    // QUAN TRỌNG: Nén cả 2 ảnh đầu vào
+    const optimizedProduct = await compressImage(isolatedProductBase64, 800);
+    const optimizedModel = await compressImage(modelImage.base64, 800);
+
     let promptText = `
-    Nhiệm vụ: Virtual Try-On.
-    Input: Ảnh 1 (Áo/Quần), Ảnh 2 (Người mẫu).
-    Output: Thay trang phục Ảnh 1 vào người Ảnh 2.
-    Yêu cầu: Giữ nguyên khuôn mặt, màu da, dáng đứng của Ảnh 2. Trang phục ôm sát tự nhiên. Ánh sáng chân thực.
+    Virtual Try-On Task.
+    Replace the model's clothes with the input item.
+    Keep face, skin tone, and pose exactly the same.
+    Realistic lighting.
     `;
 
-    if (config.enableMannequin) promptText += ` Tạo thêm một ma nơ canh đứng cạnh.`;
+    if (config.enableMannequin) promptText += ` Add a mannequin next to the model wearing the same outfit.`;
 
     const response = await callWithRetry(async () => {
       return await ai.models.generateContent({
@@ -128,9 +129,9 @@ export const generateTryOnImage = async (
         contents: {
           parts: [
             { text: "Item:" },
-            { inlineData: { mimeType: "image/png", data: isolatedProductBase64 } },
+            { inlineData: { mimeType: "image/jpeg", data: optimizedProduct } },
             { text: "Model:" },
-            { inlineData: { mimeType: modelImage.file.type, data: modelImage.base64 } },
+            { inlineData: { mimeType: "image/jpeg", data: optimizedModel } },
             { text: promptText },
           ],
         },
@@ -153,7 +154,6 @@ export const generateTryOnImage = async (
   } catch (error: any) {
     console.error("Try-On Error:", error);
     const errMsg = error.message || "";
-    if (errMsg === "BILLING_REQUIRED") throw error;
     if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
         throw new Error("QUOTA_EXCEEDED");
     }
@@ -164,6 +164,9 @@ export const generateTryOnImage = async (
 export const suggestBackgrounds = async (imageBase64: string): Promise<string[]> => {
   try {
     const ai = getClient();
+    // Nén ảnh cực nhỏ cho việc đọc text gợi ý
+    const optimizedImage = await compressImage(imageBase64, 512);
+    
     const prompt = `Gợi ý 3 bối cảnh chụp ảnh thời trang (3 dòng ngắn gọn Tiếng Việt).`;
 
     const response = await callWithRetry(async () => {
@@ -171,7 +174,7 @@ export const suggestBackgrounds = async (imageBase64: string): Promise<string[]>
             model: TEXT_MODEL_NAME,
             contents: {
                 parts: [
-                { inlineData: { mimeType: "image/png", data: imageBase64 } },
+                { inlineData: { mimeType: "image/jpeg", data: optimizedImage } },
                 { text: prompt }
                 ]
             },
@@ -197,16 +200,19 @@ export const changeBackground = async (
 ): Promise<string> => {
   try {
     const ai = getClient();
-    let finalPrompt = `Thay nền phía sau thành: ${prompt}. Giữ nguyên người mẫu. Tỉ lệ 9:16.`;
+    const optimizedBase = await compressImage(baseImageBase64, 800);
+    
+    let finalPrompt = `Change background to: ${prompt}. Keep model exactly same. Ratio 9:16.`;
     const parts: any[] = [
       { text: "Original:" },
-      { inlineData: { mimeType: "image/png", data: baseImageBase64 } }
+      { inlineData: { mimeType: "image/jpeg", data: optimizedBase } }
     ];
 
     if (backgroundImage) {
-      finalPrompt = `Ghép người mẫu từ ảnh Original vào ảnh Background. Xử lý bóng đổ chân thực.`;
+      const optimizedBg = await compressImage(backgroundImage.base64, 1024);
+      finalPrompt = `Composite model into background image. Realistic shadows.`;
       parts.push({ text: "Background:" });
-      parts.push({ inlineData: { mimeType: backgroundImage.file.type, data: backgroundImage.base64 } });
+      parts.push({ inlineData: { mimeType: "image/jpeg", data: optimizedBg } });
     }
     parts.push({ text: finalPrompt });
 
@@ -233,7 +239,6 @@ export const changeBackground = async (
   } catch (error: any) {
     console.error("Change Background Error:", error);
     const errMsg = error.message || "";
-    if (errMsg === "BILLING_REQUIRED") throw error;
     if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
         throw new Error("QUOTA_EXCEEDED");
     }
