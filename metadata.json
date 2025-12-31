@@ -1,7 +1,5 @@
 {
-  "name": "Phúc Nguyễn AI Studio",
-  "description": "Professional product isolation, background compositing, and cinematic video generation for e-commerce.",
-  "requestFramePermissions": [
-    "camera"
-  ]
+  "name": "AI Fashion Try-On",
+  "description": "Professional virtual try-on application using Gemini AI to dress models with product images.",
+  "requestFramePermissions": []
 }

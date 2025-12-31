@@ -1,77 +1,113 @@
-import React, { useCallback } from 'react';
-import { Upload, RefreshCw } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Upload, X, Image as ImageIcon } from 'lucide-react';
+import { fileToBase64 } from '../services/utils';
+import { ProcessedImage } from '../types';
 
 interface ImageUploaderProps {
   label: string;
+  subLabel: string;
+  image: ProcessedImage | null;
+  onImageChange: (image: ProcessedImage | null) => void;
   id: string;
-  image: string | null;
-  onUpload: (base64: string, name: string) => void;
-  className?: string;
-  compact?: boolean;
 }
 
-const ImageUploader: React.FC<ImageUploaderProps> = ({ label, id, image, onUpload, className = "", compact = false }) => {
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+export const ImageUploader: React.FC<ImageUploaderProps> = ({
+  label,
+  subLabel,
+  image,
+  onImageChange,
+  id
+}) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64 = event.target?.result as string;
-      onUpload(base64, file.name);
-    };
-    reader.readAsDataURL(file);
-  }, [onUpload]);
+    if (!file.type.startsWith('image/')) {
+      alert('Vui lòng chỉ tải lên tệp hình ảnh.');
+      return;
+    }
+
+    try {
+      const base64 = await fileToBase64(file);
+      const previewUrl = URL.createObjectURL(file);
+      onImageChange({ file, previewUrl, base64 });
+    } catch (err) {
+      console.error("Error processing file", err);
+      alert("Lỗi khi xử lý ảnh.");
+    }
+  };
+
+  const handleRemove = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (image) {
+      URL.revokeObjectURL(image.previewUrl);
+    }
+    onImageChange(null);
+    if (inputRef.current) {
+      inputRef.current.value = '';
+    }
+  };
 
   return (
-    <div className={`flex flex-col space-y-2 ${className}`}>
-      <label className="text-[10px] lg:text-xs font-bold text-slate-400 uppercase tracking-widest pl-1">{label}</label>
-      <div className="relative group w-full">
-        <input
-          type="file"
-          id={id}
-          accept="image/*"
-          className="hidden"
-          onChange={handleFileChange}
-        />
-        <label
-          htmlFor={id}
-          className={`relative flex flex-col items-center justify-center w-full border rounded-xl cursor-pointer transition-all duration-300 overflow-hidden group/label
-            ${image 
-              ? 'border-indigo-500/30 bg-slate-900/80 shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]' 
-              : 'border-slate-700/50 border-dashed hover:border-indigo-500/50 bg-slate-800/20 hover:bg-slate-800/40'}
-            ${compact ? 'h-28 lg:h-32' : 'h-44 lg:h-52'} 
-          `}
-          // Increased height for better touch area on mobile
-        >
-          {image ? (
-            <div className="relative w-full h-full p-2">
-              <div className="w-full h-full rounded-lg overflow-hidden relative">
-                <img src={image} alt="Preview" className="w-full h-full object-contain" />
-                {/* Overlay hover effect */}
-                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/label:opacity-100 flex flex-col items-center justify-center transition-opacity backdrop-blur-[2px]">
-                   <RefreshCw className="w-6 h-6 text-white mb-1" />
-                   <span className="text-white text-[10px] font-bold uppercase tracking-wide">Thay đổi ảnh</span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center space-y-3 p-4 text-center group-hover/label:-translate-y-1 transition-transform duration-300">
-              <div className={`rounded-full bg-slate-800/80 ring-1 ring-white/10 flex items-center justify-center shadow-lg ${compact ? 'p-3' : 'p-4'}`}>
-                <Upload className={`${compact ? 'w-5 h-5' : 'w-7 h-7'} text-slate-400 group-hover/label:text-indigo-400 transition-colors`} />
-              </div>
-              {!compact && (
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-slate-300 group-hover/label:text-white transition-colors">Tải ảnh lên</p>
-                  <p className="text-[10px] text-slate-500 uppercase tracking-wide">PNG, JPG, WEBP</p>
-                </div>
-              )}
-            </div>
-          )}
+    <div className="w-full">
+      <div className="flex justify-between items-center mb-2">
+        <label className="text-sm font-semibold text-gray-700 block">
+          {label}
         </label>
+        {image && (
+          <button 
+            onClick={handleRemove}
+            className="text-xs text-red-500 font-medium hover:text-red-700 flex items-center gap-1"
+          >
+            <X size={12} /> Xoá ảnh
+          </button>
+        )}
+      </div>
+      
+      <div 
+        className={`relative w-full aspect-[3/4] rounded-xl border-2 transition-all duration-300 overflow-hidden group cursor-pointer
+          ${image ? 'border-indigo-500 bg-gray-50' : 'border-dashed border-gray-300 bg-white hover:border-indigo-400 hover:bg-indigo-50'}`}
+        onClick={() => !image && inputRef.current?.click()}
+      >
+        <input 
+          type="file" 
+          ref={inputRef}
+          onChange={handleFileChange} 
+          accept="image/*" 
+          className="hidden" 
+          id={id}
+        />
+
+        {image ? (
+          <div className="relative w-full h-full">
+             <img 
+              src={image.previewUrl} 
+              alt={label} 
+              className="w-full h-full object-cover"
+            />
+            {/* Overlay for change hint */}
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+              <span className="text-white font-medium text-sm bg-black/50 px-3 py-1 rounded-full">
+                Nhấn để xoá & thay đổi
+              </span>
+            </div>
+            {/* Change trigger logic needs to be careful not to conflict with remove button. 
+                Currently click triggers remove handled by parent click if no image, but here image exists.
+                Let's keep it simple: Click removes logic is separate. Re-clicking container does nothing if image exists to avoid accidental replace.
+            */}
+          </div>
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mb-3 text-indigo-600">
+              <Upload size={24} />
+            </div>
+            <span className="text-sm font-medium text-gray-900">Tải ảnh lên</span>
+            <span className="text-xs text-gray-500 mt-1">{subLabel}</span>
+          </div>
+        )}
       </div>
     </div>
   );
 };
-
-export default ImageUploader;
