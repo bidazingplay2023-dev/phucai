@@ -1,61 +1,84 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { AppConfig, ProcessedImage } from "../types";
 
-// REVERT: Back to Gemini 2.5 Flash Image as requested
+// Models
 const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
-// Model for Text Analysis
 const TEXT_MODEL_NAME = 'gemini-2.5-flash-latest';
 
-// Helper to safely get API Key in various environments (Vite, Node, etc.)
+// Disable Safety Settings to prevent false blocks on mannequin/skin
+// (Google sometimes mistakes fashion photos for unsafe content)
+const SAFETY_SETTINGS = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
+
 const getApiKey = () => {
-  // Check standard process.env first (for Node/Webpack)
-  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-    return process.env.API_KEY;
+  if (typeof window !== 'undefined') {
+    const userKey = localStorage.getItem('user_api_key');
+    if (userKey && userKey.length > 10) return userKey;
   }
-  // Check Vite specific env (for client-side build support)
-  // This allows the user to set VITE_API_KEY in Vercel/Netlify dashboard
   if (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env.VITE_API_KEY) {
     return (import.meta as any).env.VITE_API_KEY;
   }
-  // Fallback/Error will be handled by SDK
-  return process.env.API_KEY;
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+      return process.env.API_KEY;
+    }
+  } catch (e) {}
+  return undefined;
 };
 
 const getClient = () => {
   const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new Error("Chưa cấu hình API Key. Vui lòng thiết lập biến môi trường API_KEY hoặc VITE_API_KEY.");
-  }
+  if (!apiKey) throw new Error("MISSING_API_KEY");
   return new GoogleGenAI({ apiKey });
 };
 
-// GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm
+// --- RETRY LOGIC (The "Backend" Simulation) ---
+// This mimics a backend queue by waiting and retrying if Google says "Too Many Requests"
+const callWithRetry = async (apiCall: () => Promise<any>, retries = 3, delay = 2000): Promise<any> => {
+  try {
+    return await apiCall();
+  } catch (error: any) {
+    const isQuotaError = error.message?.includes("429") || error.message?.includes("Quota") || error.status === 429;
+    const isOverloaded = error.message?.includes("503") || error.message?.includes("Overloaded");
+    
+    if ((isQuotaError || isOverloaded) && retries > 0) {
+      console.warn(`Gặp lỗi quá tải (429/503). Đang đợi ${delay}ms để thử lại... (Còn ${retries} lần)`);
+      // Wait for the delay
+      await new Promise(resolve => setTimeout(resolve, delay));
+      // Retry with double the delay (Exponential Backoff)
+      return callWithRetry(apiCall, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+};
+
 export const isolateProductImage = async (productImageBase64: string): Promise<string> => {
   try {
     const ai = getClient();
-    
     const prompt = `
       Nhiệm vụ: Chụp ảnh sản phẩm thương mại điện tử (E-commerce Product Photography).
-      
-      Yêu cầu:
-      1. Hãy tách chiếc quần/áo/váy trong ảnh này ra khỏi nền cũ.
-      2. Đặt nó lên một nền TRẮNG TINH KHIẾT (Pure White Background #FFFFFF).
-      3. Giữ nguyên chi tiết, màu sắc, nếp nhăn vải và ánh sáng thực tế của sản phẩm.
-      4. Loại bỏ móc treo, ma nơ canh hoặc người mẫu cũ (nếu có), chỉ giữ lại trang phục.
-      5. Căn giữa sản phẩm.
+      Yêu cầu: Tách quần/áo ra khỏi nền. Đặt trên nền TRẮNG (#FFFFFF). Giữ nguyên chi tiết. Căn giữa.
     `;
 
-    const response = await ai.models.generateContent({
-      model: IMAGE_MODEL_NAME,
-      contents: {
-        parts: [
-          { inlineData: { mimeType: "image/png", data: productImageBase64 } },
-          { text: prompt }
-        ]
-      },
-      config: {
-        imageConfig: { aspectRatio: "1:1" }, // Square aspect ratio for product shot
-      }
+    // Wrap the API call in the retry logic
+    const response = await callWithRetry(async () => {
+      return await ai.models.generateContent({
+        model: IMAGE_MODEL_NAME,
+        contents: {
+          parts: [
+            { inlineData: { mimeType: "image/png", data: productImageBase64 } },
+            { text: prompt }
+          ]
+        },
+        config: {
+          imageConfig: { aspectRatio: "1:1" },
+          safetySettings: SAFETY_SETTINGS, // Bypass safety filters
+        }
+      });
     });
 
     if (response.candidates && response.candidates.length > 0) {
@@ -68,14 +91,17 @@ export const isolateProductImage = async (productImageBase64: string): Promise<s
     }
     throw new Error("Không thể tách nền sản phẩm.");
   } catch (error: any) {
-    console.error("Isolate Product Error:", error);
-    throw new Error(error.message || "Lỗi khi xử lý ảnh sản phẩm.");
+    console.error("Isolate Error:", error);
+    const errMsg = error.message || "";
+    if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
+        throw new Error("QUOTA_EXCEEDED");
+    }
+    throw new Error(errMsg || "Lỗi khi xử lý ảnh sản phẩm.");
   }
 };
 
-// GIAI ĐOẠN 2 CỦA BƯỚC 1: Ghép vào mẫu
 export const generateTryOnImage = async (
-  isolatedProductBase64: string, // Input is now the clean product image
+  isolatedProductBase64: string,
   modelImage: ProcessedImage,
   config: AppConfig
 ): Promise<string> => {
@@ -83,41 +109,32 @@ export const generateTryOnImage = async (
     const ai = getClient();
 
     let promptText = `
-    Nhiệm vụ: Virtual Try-On (Thử đồ ảo).
-    
-    Đầu vào:
-    - Ảnh 1: Ảnh trang phục đã được tách nền (Sản phẩm cần mặc).
-    - Ảnh 2: Ảnh người mẫu gốc.
-
-    Yêu cầu thực hiện:
-    1. Thay trang phục hiện tại của người mẫu trong Ảnh 2 bằng trang phục trong Ảnh 1.
-    2. QUAN TRỌNG: Giữ nguyên khuôn mặt, màu da, dáng đứng và bối cảnh của Ảnh 2. KHÔNG ĐƯỢC thay đổi khuôn mặt.
-    3. Trang phục mới phải ôm sát cơ thể người mẫu một cách tự nhiên (realistic fit).
-    4. Xử lý ánh sáng trên trang phục mới sao cho khớp với ánh sáng môi trường của Ảnh 2.
+    Nhiệm vụ: Virtual Try-On.
+    Input: Ảnh 1 (Áo/Quần), Ảnh 2 (Người mẫu).
+    Output: Thay trang phục Ảnh 1 vào người Ảnh 2.
+    Yêu cầu: Giữ nguyên khuôn mặt, màu da, dáng đứng của Ảnh 2. Trang phục ôm sát tự nhiên. Ánh sáng chân thực.
     `;
 
-    if (config.enableMannequin) {
-      promptText += `
-      - Tạo thêm một ma nơ canh đứng cạnh người mẫu, mặc cùng bộ trang phục này.
-      `;
-    }
+    if (config.enableMannequin) promptText += ` Tạo thêm một ma nơ canh đứng cạnh.`;
 
-    const contents = {
-      parts: [
-        { text: "ẢNH 1 (SẢN PHẨM MỚI):" },
-        { inlineData: { mimeType: "image/png", data: isolatedProductBase64 } },
-        { text: "ẢNH 2 (NGƯỜI MẪU GỐC):" },
-        { inlineData: { mimeType: modelImage.file.type, data: modelImage.base64 } },
-        { text: promptText },
-      ],
-    };
-
-    const response = await ai.models.generateContent({
-      model: IMAGE_MODEL_NAME,
-      contents: contents,
-      config: {
-        imageConfig: { aspectRatio: "9:16" },
-      }
+    // Wrap in retry logic
+    const response = await callWithRetry(async () => {
+      return await ai.models.generateContent({
+        model: IMAGE_MODEL_NAME,
+        contents: {
+          parts: [
+            { text: "Item:" },
+            { inlineData: { mimeType: "image/png", data: isolatedProductBase64 } },
+            { text: "Model:" },
+            { inlineData: { mimeType: modelImage.file.type, data: modelImage.base64 } },
+            { text: promptText },
+          ],
+        },
+        config: {
+          imageConfig: { aspectRatio: "9:16" },
+          safetySettings: SAFETY_SETTINGS,
+        }
+      });
     });
 
     if (response.candidates && response.candidates.length > 0) {
@@ -130,45 +147,45 @@ export const generateTryOnImage = async (
     }
     throw new Error("AI không trả về hình ảnh nào.");
   } catch (error: any) {
-    console.error("Gemini Try-On Error:", error);
-    throw new Error(error.message || "Lỗi xử lý ảnh.");
+    console.error("Try-On Error:", error);
+    const errMsg = error.message || "";
+    if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
+        throw new Error("QUOTA_EXCEEDED");
+    }
+    throw new Error(errMsg || "Lỗi xử lý ảnh.");
   }
 };
 
-// Step 2: Suggest Backgrounds (Uses Flash text model)
 export const suggestBackgrounds = async (imageBase64: string): Promise<string[]> => {
   try {
     const ai = getClient();
-    
-    const prompt = `
-      Gợi ý 3 bối cảnh chụp ảnh thời trang phù hợp cho trang phục trong ảnh này. 
-      Trả về danh sách 3 dòng ngắn gọn bằng Tiếng Việt.
-    `;
+    const prompt = `Gợi ý 3 bối cảnh chụp ảnh thời trang (3 dòng ngắn gọn Tiếng Việt).`;
 
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL_NAME,
-      contents: {
-        parts: [
-           { inlineData: { mimeType: "image/png", data: imageBase64 } },
-           { text: prompt }
-        ]
-      }
-    });
+    // Text requests are cheaper, but still good to retry
+    const response = await callWithRetry(async () => {
+        return await ai.models.generateContent({
+            model: TEXT_MODEL_NAME,
+            contents: {
+                parts: [
+                { inlineData: { mimeType: "image/png", data: imageBase64 } },
+                { text: prompt }
+                ]
+            },
+            config: { safetySettings: SAFETY_SETTINGS }
+        });
+    }, 2, 1000); // Fewer retries for text
 
     const text = response.text || "";
     const suggestions = text.split('\n')
       .map(line => line.replace(/^\d+[\.\)]\s*|-\s*/, '').trim())
       .filter(line => line.length > 5)
       .slice(0, 3);
-      
     return suggestions.length > 0 ? suggestions : ["Studio hiện đại", "Đường phố năng động", "Quán cafe sang trọng"];
   } catch (error) {
-    console.error("Suggestion Error:", error);
     return ["Nền màu be tối giản", "Đường phố thành thị", "Nội thất sang trọng"];
   }
 };
 
-// Step 2: Change Background
 export const changeBackground = async (
   baseImageBase64: string,
   prompt: string,
@@ -176,39 +193,28 @@ export const changeBackground = async (
 ): Promise<string> => {
   try {
     const ai = getClient();
-
-    let finalPrompt = `
-      Nhiệm vụ: Thay đổi bối cảnh (background).
-      Yêu cầu: 
-      - Giữ nguyên người mẫu và trang phục từ ảnh gốc.
-      - Thay nền phía sau bằng: ${prompt}.
-      - Tỉ lệ ảnh: 9:16.
-    `;
-
+    let finalPrompt = `Thay nền phía sau thành: ${prompt}. Giữ nguyên người mẫu. Tỉ lệ 9:16.`;
     const parts: any[] = [
-      { text: "ẢNH GỐC:" },
+      { text: "Original:" },
       { inlineData: { mimeType: "image/png", data: baseImageBase64 } }
     ];
 
     if (backgroundImage) {
-      finalPrompt = `
-        Nhiệm vụ: Ghép người mẫu vào nền mới.
-        - Lấy người mẫu từ ẢNH GỐC.
-        - Ghép vào ẢNH NỀN MỚI.
-        - Xử lý bóng đổ và ánh sáng chân thực.
-      `;
-      parts.push({ text: "ẢNH NỀN MỚI:" });
+      finalPrompt = `Ghép người mẫu từ ảnh Original vào ảnh Background. Xử lý bóng đổ chân thực.`;
+      parts.push({ text: "Background:" });
       parts.push({ inlineData: { mimeType: backgroundImage.file.type, data: backgroundImage.base64 } });
     }
-    
     parts.push({ text: finalPrompt });
 
-    const response = await ai.models.generateContent({
-      model: IMAGE_MODEL_NAME,
-      contents: { parts },
-      config: {
-        imageConfig: { aspectRatio: "9:16" },
-      }
+    const response = await callWithRetry(async () => {
+        return await ai.models.generateContent({
+            model: IMAGE_MODEL_NAME,
+            contents: { parts },
+            config: {
+                imageConfig: { aspectRatio: "9:16" },
+                safetySettings: SAFETY_SETTINGS,
+            }
+        });
     });
 
     if (response.candidates && response.candidates.length > 0) {
@@ -220,9 +226,12 @@ export const changeBackground = async (
       }
     }
     throw new Error("AI không thể tạo bối cảnh mới.");
-
   } catch (error: any) {
     console.error("Change Background Error:", error);
-    throw new Error(error.message || "Lỗi đổi bối cảnh.");
+    const errMsg = error.message || "";
+    if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
+        throw new Error("QUOTA_EXCEEDED");
+    }
+    throw new Error(errMsg || "Lỗi đổi bối cảnh.");
   }
 };

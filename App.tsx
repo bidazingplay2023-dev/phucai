@@ -2,13 +2,18 @@ import React, { useState } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultDisplay } from './components/ResultDisplay';
 import { BackgroundEditor } from './components/BackgroundEditor';
+import { SettingsModal } from './components/SettingsModal';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
 import { ProcessedImage, GenerationState, AppConfig, AppStep } from './types';
-import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, User, Layers } from 'lucide-react';
+import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, User, Layers, Settings } from 'lucide-react';
 
 const App: React.FC = () => {
   // Navigation State
   const [activeTab, setActiveTab] = useState<AppStep>('TRY_ON');
+  
+  // Settings Modal State
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isErrorTriggered, setIsErrorTriggered] = useState(false);
 
   // Step 1 Data
   const [productImage, setProductImage] = useState<ProcessedImage | null>(null);
@@ -26,6 +31,15 @@ const App: React.FC = () => {
   // Step 2 Data
   const [step2BaseImage, setStep2BaseImage] = useState<string | null>(null);
 
+  const handleError = (error: any, context: string) => {
+    if (error.message === "QUOTA_EXCEEDED") {
+        setIsErrorTriggered(true);
+        setIsSettingsOpen(true);
+        return "Vui lòng nhập API Key để tiếp tục.";
+    }
+    return context + ": " + error.message;
+  };
+
   // Sub-step 1.1: Isolate Product
   const handleIsolateProduct = async () => {
     if (!productImage) return;
@@ -35,7 +49,8 @@ const App: React.FC = () => {
       const result = await isolateProductImage(productImage.base64);
       setIsolatedProduct(result);
     } catch (error: any) {
-      setTryOnState(prev => ({ ...prev, error: "Lỗi tách nền: " + error.message }));
+      const msg = handleError(error, "Lỗi tách nền");
+      setTryOnState(prev => ({ ...prev, error: msg }));
     } finally {
       setIsIsolating(false);
     }
@@ -58,10 +73,11 @@ const App: React.FC = () => {
         error: null
       }));
     } catch (error: any) {
+      const msg = handleError(error, "Lỗi thử đồ");
       setTryOnState(prev => ({ 
         ...prev,
         isLoading: false, 
-        error: error.message || "Đã xảy ra lỗi. Vui lòng kiểm tra API Key." 
+        error: msg
       }));
     }
   };
@@ -79,8 +95,20 @@ const App: React.FC = () => {
     setTryOnState({ isLoading: false, results: [], error: null });
   };
 
+  const openSettings = () => {
+    setIsErrorTriggered(false);
+    setIsSettingsOpen(true);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Settings Modal */}
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        isErrorTrigger={isErrorTriggered}
+      />
+
       {/* Professional Header */}
       <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-lg border-b border-gray-100 pt-safe">
         <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
@@ -92,9 +120,16 @@ const App: React.FC = () => {
               Fashion Studio
             </h1>
           </div>
-          <div className="text-[10px] font-bold tracking-wider text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-full uppercase">
-            PRO AI
-          </div>
+          <button 
+            onClick={openSettings}
+            className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors relative"
+          >
+            <Settings size={20} />
+            {/* Optional dot if user has custom key */}
+            {typeof window !== 'undefined' && localStorage.getItem('user_api_key') && (
+                <div className="absolute top-2 right-2 w-2 h-2 bg-green-500 rounded-full ring-1 ring-white"></div>
+            )}
+          </button>
         </div>
       </header>
 
