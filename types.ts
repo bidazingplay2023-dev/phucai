@@ -16,6 +16,13 @@ export interface AppConfig {
 
 export type AppStep = 'TRY_ON' | 'BACKGROUND_EDIT';
 
+// New interface to couple the image with its specific video prompts
+export interface GeneratedBackground {
+  base64: string;
+  videoPrompts: string[];
+  isVideoPromptLoading: boolean;
+}
+
 export interface BackgroundState {
   selectedBaseImage: string | null; // Base64 of the image chosen from Step 1
   backgroundImage: ProcessedImage | null; // User uploaded background
@@ -23,6 +30,9 @@ export interface BackgroundState {
   aiSuggestions: string[];
   isSuggesting: boolean;
   isGenerating: boolean;
-  results: string[]; // Changed from resultImage to array
+  
+  // Updated: Store objects instead of just strings
+  results: GeneratedBackground[]; 
+  
   error: string | null;
 }

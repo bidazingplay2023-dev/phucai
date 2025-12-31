@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { ProcessedImage, BackgroundState } from '../types';
-import { suggestBackgrounds, changeBackground } from '../services/geminiService';
+import { ProcessedImage, BackgroundState, GeneratedBackground } from '../types';
+import { suggestBackgrounds, changeBackground, generateVideoPrompt } from '../services/geminiService';
 import { ImageUploader } from './ImageUploader';
-import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Trash2 } from 'lucide-react';
+import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Trash2, Video, Copy, CheckCheck } from 'lucide-react';
 
 interface BackgroundEditorProps {
   initialBaseImage: string | null;
@@ -17,27 +17,30 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     isSuggesting: false,
     isGenerating: false,
     results: [],
-    error: null
+    error: null,
   });
 
   const [mode, setMode] = useState<'UPLOAD' | 'PROMPT'>('UPLOAD');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  // Sync prop to state if it changes (e.g. user selected a new image from Step 1)
+  // Sync prop to state if it changes
   useEffect(() => {
     if (initialBaseImage) {
       setState(prev => ({ 
         ...prev, 
         selectedBaseImage: initialBaseImage,
-        results: [], // Clear previous results when new base image comes in
-        error: null
+        results: [], 
+        error: null,
       }));
     }
   }, [initialBaseImage]);
 
-  // Reset selected index when new results come in
+  // Reset selected index when new results come in (usually prepended to top)
   useEffect(() => {
-    setSelectedIndex(0);
+    if (state.results.length > 0) {
+        setSelectedIndex(0);
+    }
   }, [state.results.length]);
 
   const handleSuggest = async () => {
@@ -57,7 +60,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
         return;
     }
 
-    // Validation based on active mode
     if (mode === 'UPLOAD' && !state.backgroundImage) {
       setState(prev => ({ ...prev, error: "Vui lòng tải ảnh nền lên." }));
       return;
@@ -73,18 +75,51 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       const bgImageParam = mode === 'UPLOAD' ? state.backgroundImage : null;
       const promptParam = mode === 'PROMPT' ? state.textPrompt : '';
 
-      const result = await changeBackground(state.selectedBaseImage, promptParam, bgImageParam);
+      const resultBase64 = await changeBackground(state.selectedBaseImage, promptParam, bgImageParam);
       
-      setState(prev => ({ 
-        ...prev, 
-        isGenerating: false, 
-        results: [result, ...(isRegenerate ? prev.results : [])] 
-      }));
-      
-      if (!isRegenerate) {
-          setState(prev => ({ ...prev, results: [result] }));
-      } else {
-          setState(prev => ({ ...prev, results: [result, ...prev.results] }));
+      // Create a new result object with loading state for prompts
+      const newResultItem: GeneratedBackground = {
+          base64: resultBase64,
+          videoPrompts: [],
+          isVideoPromptLoading: true
+      };
+
+      // 1. Update UI with the image immediately
+      setState(prev => {
+          const updatedResults = isRegenerate ? [newResultItem, ...prev.results] : [newResultItem];
+          return { 
+            ...prev, 
+            isGenerating: false, 
+            results: updatedResults 
+          };
+      });
+
+      // 2. Automatically generate prompt for THIS specific image
+      try {
+        const promptsResult = await generateVideoPrompt(resultBase64);
+        
+        // Update the specific item in the results array
+        setState(prev => {
+            const updatedResults = prev.results.map(item => {
+                // Find the item by matching base64 (since it's unique per generation usually)
+                if (item.base64 === resultBase64) {
+                    return { ...item, videoPrompts: promptsResult, isVideoPromptLoading: false };
+                }
+                return item;
+            });
+            return { ...prev, results: updatedResults };
+        });
+      } catch (videoErr) {
+        console.error("Video prompt failed", videoErr);
+        setState(prev => {
+            const updatedResults = prev.results.map(item => {
+                if (item.base64 === resultBase64) {
+                    return { ...item, videoPrompts: ["Lỗi tạo prompt video."], isVideoPromptLoading: false };
+                }
+                return item;
+            });
+            return { ...prev, results: updatedResults };
+        });
       }
 
     } catch (err: any) {
@@ -94,15 +129,21 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
   const handleDownload = () => {
     if (state.results.length === 0) return;
+    const currentResult = state.results[selectedIndex];
     const link = document.createElement('a');
-    link.href = `data:image/png;base64,${state.results[selectedIndex]}`;
+    link.href = `data:image/png;base64,${currentResult.base64}`;
     link.download = `ai-bg-change-${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Logic to upload a base image if not provided by Step 1
+  const copyToClipboard = (text: string, idx: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(idx);
+    setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
   const handleBaseImageUpload = (img: ProcessedImage | null) => {
     setState(prev => ({ 
       ...prev, 
@@ -115,6 +156,11 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   const clearBaseImage = () => {
       setState(prev => ({ ...prev, selectedBaseImage: null, results: [] }));
   };
+
+  const PROMPT_LABELS = ["Cinematic (Điện ảnh)", "Dynamic (Năng động)", "Lifestyle (Tự nhiên)"];
+
+  // Get current selected item safely
+  const currentItem = state.results[selectedIndex];
 
   return (
     <div className="animate-in slide-in-from-right duration-500 pb-10">
@@ -284,40 +330,87 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
             {/* Right Column: Result */}
             <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200 flex flex-col min-h-[500px]">
-            {state.results.length > 0 ? (
+            {state.results.length > 0 && currentItem ? (
                 <div className="w-full flex flex-col gap-4 animate-in zoom-in-95 duration-300 h-full">
                 
                 {/* Main Image View */}
                 <div className="relative w-full aspect-[9/16] rounded-xl overflow-hidden shadow-lg bg-gray-900 group">
                     <img 
-                        src={`data:image/png;base64,${state.results[selectedIndex]}`} 
+                        src={`data:image/png;base64,${currentItem.base64}`} 
                         className="w-full h-full object-contain"
                         alt="Final Result"
                     />
                 </div>
 
                 {/* Thumbnails */}
-                <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                    {state.results.map((res, idx) => (
-                        <button
-                        key={idx}
-                        onClick={() => setSelectedIndex(idx)}
-                        className={`relative flex-shrink-0 w-14 h-20 rounded-md overflow-hidden border-2 transition-all ${
-                            idx === selectedIndex ? 'border-indigo-600 ring-2 ring-indigo-100' : 'border-transparent opacity-60 hover:opacity-100'
-                        }`}
-                        >
-                        <img 
-                            src={`data:image/png;base64,${res}`} 
-                            className="w-full h-full object-cover" 
-                            alt={`Thumb ${idx}`}
-                        />
-                        {idx === selectedIndex && (
-                            <div className="absolute inset-0 bg-indigo-900/10 flex items-center justify-center">
-                            <Check size={12} className="text-white drop-shadow-md" />
-                            </div>
-                        )}
-                        </button>
-                    ))}
+                {state.results.length > 1 && (
+                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                        {state.results.map((res, idx) => (
+                            <button
+                            key={idx}
+                            onClick={() => setSelectedIndex(idx)}
+                            className={`relative flex-shrink-0 w-14 h-20 rounded-md overflow-hidden border-2 transition-all ${
+                                idx === selectedIndex ? 'border-indigo-600 ring-2 ring-indigo-100' : 'border-transparent opacity-60 hover:opacity-100'
+                            }`}
+                            >
+                            <img 
+                                src={`data:image/png;base64,${res.base64}`} 
+                                className="w-full h-full object-cover" 
+                                alt={`Thumb ${idx}`}
+                            />
+                            {idx === selectedIndex && (
+                                <div className="absolute inset-0 bg-indigo-900/10 flex items-center justify-center">
+                                <Check size={12} className="text-white drop-shadow-md" />
+                                </div>
+                            )}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                {/* Video Prompt Generator Result - Specific to the selected image */}
+                <div className="bg-white rounded-xl border border-indigo-100 p-4 shadow-sm animate-in slide-in-from-bottom-4 transition-all">
+                    <div className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-3">
+                        <div className="bg-gradient-to-r from-pink-500 to-orange-500 text-white p-1 rounded-md">
+                            <Video size={14} />
+                        </div>
+                        Prompt Video (Cho ảnh hiện tại)
+                    </div>
+                    
+                    {currentItem.isVideoPromptLoading ? (
+                        <div className="flex items-center gap-2 text-xs text-gray-500 py-2">
+                            <Loader2 size={14} className="animate-spin text-indigo-600" />
+                            Đang phân tích ảnh để viết 3 prompt...
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {currentItem.videoPrompts && currentItem.videoPrompts.length > 0 ? (
+                                currentItem.videoPrompts.map((prompt, idx) => (
+                                    <div key={idx} className="relative group">
+                                        <div className="text-[10px] uppercase font-bold text-gray-400 mb-1 ml-1">
+                                            {PROMPT_LABELS[idx] || `Lựa chọn ${idx + 1}`}
+                                        </div>
+                                        <div className="relative">
+                                            <textarea 
+                                                readOnly
+                                                value={prompt}
+                                                className="w-full h-20 text-xs p-3 pr-10 bg-gray-50 border border-gray-200 rounded-lg text-gray-700 resize-none focus:outline-none focus:border-indigo-300"
+                                            />
+                                            <button 
+                                                onClick={() => copyToClipboard(prompt, idx)}
+                                                className="absolute top-2 right-2 p-1.5 bg-white border border-gray-200 rounded-md shadow-sm hover:bg-gray-50 transition-colors text-gray-600"
+                                                title="Sao chép"
+                                            >
+                                                {copiedIndex === idx ? <CheckCheck size={14} className="text-green-600" /> : <Copy size={14} />}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="text-xs text-red-500">Không có prompt nào được tạo.</div>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Actions Grid */}
@@ -335,7 +428,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                         ) : (
                         <Plus size={20} />
                         )}
-                        {state.isGenerating ? 'Đang tạo...' : 'Tạo thêm 1 ảnh'}
+                        {state.isGenerating ? 'Đang tạo...' : 'Tạo thêm'}
                     </button>
 
                     <button 
@@ -346,12 +439,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                         Tải về
                     </button>
                 </div>
-                
-                {state.isGenerating && (
-                    <p className="text-center text-xs text-indigo-600 animate-pulse">
-                    Đang tạo thêm biến thể mới...
-                    </p>
-                )}
                 </div>
             ) : (
                 <div className="text-center text-gray-400 flex flex-col items-center justify-center flex-grow h-full">

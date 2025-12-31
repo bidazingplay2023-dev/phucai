@@ -2,23 +2,17 @@ import React, { useState } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultDisplay } from './components/ResultDisplay';
 import { BackgroundEditor } from './components/BackgroundEditor';
-import { SettingsModal } from './components/SettingsModal';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
 import { ProcessedImage, GenerationState, AppConfig, AppStep } from './types';
-import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, User, Layers, Settings } from 'lucide-react';
+import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Navigation State
   const [activeTab, setActiveTab] = useState<AppStep>('TRY_ON');
-  
-  // Settings Modal State
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isErrorTriggered, setIsErrorTriggered] = useState(false);
-  const [errorType, setErrorType] = useState<'QUOTA' | 'BILLING'>('QUOTA');
 
   // Step 1 Data
   const [productImage, setProductImage] = useState<ProcessedImage | null>(null);
-  const [isolatedProduct, setIsolatedProduct] = useState<string | null>(null);
+  const [isolatedProduct, setIsolatedProduct] = useState<string | null>(null); // New state for isolated product
   const [isIsolating, setIsIsolating] = useState(false);
 
   const [modelImage, setModelImage] = useState<ProcessedImage | null>(null);
@@ -32,22 +26,6 @@ const App: React.FC = () => {
   // Step 2 Data
   const [step2BaseImage, setStep2BaseImage] = useState<string | null>(null);
 
-  const handleError = (error: any, context: string) => {
-    if (error.message === "QUOTA_EXCEEDED") {
-        setIsErrorTriggered(true);
-        setErrorType('QUOTA');
-        setIsSettingsOpen(true);
-        return "Vui lòng kiểm tra API Key.";
-    }
-    if (error.message === "BILLING_REQUIRED") {
-        setIsErrorTriggered(true);
-        setErrorType('BILLING');
-        setIsSettingsOpen(true);
-        return "Yêu cầu tài khoản có thanh toán.";
-    }
-    return context + ": " + error.message;
-  };
-
   // Sub-step 1.1: Isolate Product
   const handleIsolateProduct = async () => {
     if (!productImage) return;
@@ -57,8 +35,7 @@ const App: React.FC = () => {
       const result = await isolateProductImage(productImage.base64);
       setIsolatedProduct(result);
     } catch (error: any) {
-      const msg = handleError(error, "Lỗi tách nền");
-      setTryOnState(prev => ({ ...prev, error: msg }));
+      setTryOnState(prev => ({ ...prev, error: "Lỗi tách nền: " + error.message }));
     } finally {
       setIsIsolating(false);
     }
@@ -66,6 +43,7 @@ const App: React.FC = () => {
 
   // Sub-step 1.2: Try On
   const handleGenerateTryOn = async (isRegenerate: boolean = false) => {
+    // Requires isolated product AND model image
     if (!isolatedProduct || !modelImage) {
       setTryOnState(prev => ({ ...prev, error: "Vui lòng hoàn thành bước chuẩn bị sản phẩm và chọn ảnh người mẫu." }));
       return;
@@ -81,11 +59,10 @@ const App: React.FC = () => {
         error: null
       }));
     } catch (error: any) {
-      const msg = handleError(error, "Lỗi thử đồ");
       setTryOnState(prev => ({ 
         ...prev,
         isLoading: false, 
-        error: msg
+        error: error.message || "Đã xảy ra lỗi không xác định." 
       }));
     }
   };
@@ -98,61 +75,66 @@ const App: React.FC = () => {
 
   const resetTryOn = () => {
     setProductImage(null);
-    setIsolatedProduct(null);
+    setIsolatedProduct(null); // Reset isolation
     setModelImage(null);
     setTryOnState({ isLoading: false, results: [], error: null });
   };
 
-  const openSettings = () => {
-    setIsErrorTriggered(false);
-    setIsSettingsOpen(true);
-  };
-
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Settings Modal */}
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)} 
-        isErrorTrigger={isErrorTriggered}
-        errorType={errorType}
-      />
-
-      {/* Professional Header */}
-      <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-lg border-b border-gray-100 pt-safe">
-        <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-gradient-to-tr from-indigo-600 to-purple-600 p-1.5 rounded-lg text-white shadow-sm">
-              <Sparkles size={18} fill="currentColor" />
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 pb-20">
+      {/* Header */}
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100 shadow-sm">
+        <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2" role="button" onClick={() => setActiveTab('TRY_ON')}>
+            <div className="bg-indigo-600 p-2 rounded-lg text-white">
+              <Sparkles size={20} />
             </div>
-            <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-900 to-purple-900">
-              Fashion Studio
+            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
+              Fashion AI
             </h1>
           </div>
-          <button 
-            onClick={openSettings}
-            className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors relative"
-          >
-            <Settings size={20} />
-            {/* Optional dot if user has custom key */}
-            {typeof window !== 'undefined' && localStorage.getItem('user_api_key') && (
-                <div className="absolute top-2 right-2 w-2 h-2 bg-green-500 rounded-full ring-1 ring-white"></div>
-            )}
-          </button>
+          <div className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">
+            Gemini 2.5
+          </div>
         </div>
       </header>
 
-      {/* Main Content Area - Scrollable */}
-      <main className="flex-1 overflow-y-auto pb-32 pt-4 px-4 max-w-md mx-auto w-full no-scrollbar">
+      <main className="max-w-md mx-auto px-4 py-4">
         
-        {/* Global Error */}
+        {/* Navigation Tabs */}
+        <div className="flex p-1 bg-gray-200/50 rounded-xl mb-6 backdrop-blur-sm">
+          <button
+            onClick={() => setActiveTab('TRY_ON')}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all duration-300 ${
+              activeTab === 'TRY_ON' 
+                ? 'bg-white shadow-sm text-indigo-600 scale-[1.02]' 
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Shirt size={18} />
+            1. Mặc thử
+          </button>
+          <button
+            onClick={() => setActiveTab('BACKGROUND_EDIT')}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all duration-300 ${
+              activeTab === 'BACKGROUND_EDIT' 
+                ? 'bg-white shadow-sm text-indigo-600 scale-[1.02]' 
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <ImageIcon size={18} />
+            2. Đổi bối cảnh
+          </button>
+        </div>
+
+        {/* Global Error (for Try On tab) */}
         {tryOnState.error && activeTab === 'TRY_ON' && (
-          <div className="mb-6 bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3 text-red-700 animate-in fade-in slide-in-from-top-2 shadow-sm">
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 text-red-700 animate-in fade-in slide-in-from-top-4">
             <AlertCircle className="shrink-0 mt-0.5" size={20} />
-            <div className="text-sm font-medium">{tryOnState.error}</div>
+            <div className="text-sm">{tryOnState.error}</div>
             <button 
               onClick={() => setTryOnState(prev => ({...prev, error: null}))}
-              className="ml-auto text-red-400 hover:text-red-700 p-1"
+              className="ml-auto text-red-500 hover:text-red-800"
             >
               ✕
             </button>
@@ -161,101 +143,136 @@ const App: React.FC = () => {
 
         {/* TAB 1: TRY ON */}
         <div className={activeTab === 'TRY_ON' ? 'block animate-in fade-in duration-300' : 'hidden'}>
+            {/* Workflow Container */}
             {tryOnState.results.length === 0 ? (
-              <div className="space-y-6">
+              <div className="space-y-8">
                 
-                {/* Section 1: Product */}
-                <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">1</div>
-                    <h3 className="font-semibold text-gray-800">Ảnh Sản Phẩm</h3>
-                  </div>
+                {/* Step 1.1: Product Preparation */}
+                <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
+                  <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                    <span className="bg-blue-100 text-blue-700 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
+                    Chuẩn bị sản phẩm
+                  </h3>
                   
-                  <div className="flex gap-3 h-40">
-                     <div className="flex-1">
+                  <div className="flex gap-4">
+                     {/* Input Original Product */}
+                     <div className="w-1/2">
                         <ImageUploader 
                           id="product-upload"
                           label="" 
-                          subLabel="Ảnh gốc"
+                          subLabel="Ảnh quần áo gốc"
                           image={productImage}
                           onImageChange={(img) => {
                             setProductImage(img);
-                            setIsolatedProduct(null);
+                            setIsolatedProduct(null); // Reset isolation if image changes
                           }}
                         />
                      </div>
 
-                     <div className="flex-1 flex flex-col items-center justify-center border-l border-gray-100 pl-3">
+                     {/* Arrow or Result */}
+                     <div className="w-1/2 flex flex-col items-center justify-center">
                         {!productImage ? (
-                           <div className="text-xs text-gray-400 text-center px-4">Tải ảnh sản phẩm trước</div>
+                           <div className="text-xs text-gray-400 text-center">Tải ảnh bên trái trước</div>
                         ) : isIsolating ? (
                            <div className="flex flex-col items-center text-blue-600 gap-2">
-                              <Loader2 className="animate-spin" size={20} />
-                              <span className="text-[10px] font-semibold uppercase tracking-wide">Đang tách nền</span>
+                              <Loader2 className="animate-spin" />
+                              <span className="text-xs font-medium">Đang tách nền...</span>
                            </div>
                         ) : isolatedProduct ? (
-                           <div className="relative w-full h-full rounded-xl border border-green-200 bg-green-50/50 overflow-hidden group">
+                           <div className="relative w-full aspect-[3/4] rounded-xl border-2 border-green-200 bg-green-50 overflow-hidden group">
                               <img src={`data:image/png;base64,${isolatedProduct}`} className="w-full h-full object-contain p-2" alt="Isolated" />
-                              <div className="absolute bottom-0 inset-x-0 bg-green-500 text-white text-[9px] py-0.5 text-center font-bold uppercase tracking-wider">
+                              <div className="absolute top-2 right-2 bg-green-500 text-white p-1 rounded-full shadow-md">
+                                 <CheckCircle2 size={12} />
+                              </div>
+                              <div className="absolute bottom-0 inset-x-0 bg-green-600/90 text-white text-[10px] py-1 text-center font-medium">
                                 Đã tách nền
                               </div>
                            </div>
                         ) : (
                            <button 
                              onClick={handleIsolateProduct}
-                             className="flex flex-col items-center gap-2 text-blue-600 bg-blue-50/50 hover:bg-blue-50 active:bg-blue-100 p-2 rounded-xl w-full h-full justify-center transition-all border border-blue-200 border-dashed group"
+                             className="flex flex-col items-center gap-2 text-blue-600 bg-blue-50 hover:bg-blue-100 p-4 rounded-xl w-full h-full justify-center transition-colors border border-blue-200 border-dashed"
                            >
-                              <Scissors size={20} className="group-hover:scale-110 transition-transform" />
-                              <span className="text-xs font-bold text-center">Tách nền<br/>Ngay</span>
+                              <Scissors size={24} />
+                              <span className="text-xs font-bold text-center">Tách nền<br/>Sản phẩm</span>
                            </button>
                         )}
                      </div>
                   </div>
                 </div>
 
-                {/* Section 2: Model */}
-                <div className={`bg-white rounded-2xl p-4 shadow-sm border border-gray-100 transition-all duration-300 ${!isolatedProduct ? 'opacity-60 grayscale-[0.5]' : 'opacity-100'}`}>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs font-bold">2</div>
-                    <h3 className="font-semibold text-gray-800">Ảnh Người Mẫu</h3>
+                {/* Arrow Connector */}
+                <div className="flex justify-center -my-4 relative z-10">
+                   <div className="bg-gray-100 p-2 rounded-full text-gray-400">
+                      <ArrowRight size={20} className="rotate-90" />
+                   </div>
+                </div>
+
+                {/* Step 1.2: Model & Generate */}
+                <div className={`bg-white rounded-2xl p-5 shadow-sm border border-gray-100 relative overflow-hidden transition-opacity duration-300 ${!isolatedProduct ? 'opacity-50 grayscale pointer-events-none' : 'opacity-100'}`}>
+                  <div className="absolute top-0 left-0 w-1 h-full bg-purple-500"></div>
+                  <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                    <span className="bg-purple-100 text-purple-700 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
+                    Chọn người mẫu & Mặc thử
+                  </h3>
+
+                  <div className="mb-4">
+                    <ImageUploader 
+                      id="model-upload"
+                      label="" 
+                      subLabel="Ảnh người mẫu"
+                      image={modelImage}
+                      onImageChange={setModelImage}
+                    />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="col-span-1">
-                        <ImageUploader 
-                        id="model-upload"
-                        label="" 
-                        subLabel="Chọn mẫu"
-                        image={modelImage}
-                        onImageChange={setModelImage}
+                  {/* Config Section */}
+                  <div className="bg-gray-50 rounded-xl p-3 border border-gray-200 shadow-sm mb-4">
+                    <label className="flex items-center justify-between cursor-pointer group">
+                      <div className="flex items-center gap-2">
+                         <span className="text-xs font-bold text-gray-700">Thêm Manocanh (Beta)</span>
+                      </div>
+                      <div className="relative">
+                        <input 
+                          type="checkbox" 
+                          className="hidden"
+                          checked={config.enableMannequin}
+                          onChange={(e) => setConfig(prev => ({ ...prev, enableMannequin: e.target.checked }))}
                         />
-                    </div>
-                    
-                    {/* Config & Options */}
-                    <div className="col-span-1 flex flex-col justify-center space-y-3">
-                        <div className="text-xs text-gray-500 mb-1">Tuỳ chọn:</div>
-                        <label className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer ${config.enableMannequin ? 'border-purple-200 bg-purple-50' : 'border-gray-200 bg-gray-50'}`}>
-                            <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${config.enableMannequin ? 'bg-purple-600 border-purple-600' : 'bg-white border-gray-300'}`}>
-                                {config.enableMannequin && <CheckCircle2 size={12} className="text-white" />}
-                            </div>
-                            <input 
-                            type="checkbox" 
-                            className="hidden"
-                            checked={config.enableMannequin}
-                            onChange={(e) => setConfig(prev => ({ ...prev, enableMannequin: e.target.checked }))}
-                            />
-                            <div className="flex flex-col">
-                                <span className={`text-xs font-bold ${config.enableMannequin ? 'text-purple-700' : 'text-gray-600'}`}>+ Manocanh</span>
-                            </div>
-                        </label>
-                    </div>
+                        <div className={`w-8 h-5 rounded-full shadow-inner transition-colors ${config.enableMannequin ? 'bg-purple-600' : 'bg-gray-300'}`}></div>
+                        <div className={`absolute top-1 left-1 bg-white w-3 h-3 rounded-full shadow transition-transform ${config.enableMannequin ? 'translate-x-3' : ''}`}></div>
+                      </div>
+                    </label>
                   </div>
+
+                  <button
+                    onClick={() => handleGenerateTryOn(false)}
+                    disabled={tryOnState.isLoading || !isolatedProduct || !modelImage}
+                    className={`
+                      w-full py-4 px-6 rounded-xl font-bold text-white shadow-lg
+                      flex items-center justify-center gap-3 transition-all duration-300
+                      ${tryOnState.isLoading || !isolatedProduct || !modelImage
+                        ? 'bg-gray-400 cursor-not-allowed' 
+                        : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:scale-[1.02] active:scale-[0.98]'}
+                    `}
+                  >
+                    {tryOnState.isLoading ? (
+                      <>
+                        <Loader2 className="animate-spin" size={24} />
+                        <span>Đang xử lý (15s)...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={24} />
+                        <span>Bắt đầu mặc thử</span>
+                      </>
+                    )}
+                  </button>
                 </div>
-                
-                {/* Spacer for Floating Button */}
-                <div className="h-20"></div>
               </div>
             ) : (
+              /* Result Section */
               <ResultDisplay 
                 results={tryOnState.results} 
                 isRegenerating={tryOnState.isLoading}
@@ -274,66 +291,6 @@ const App: React.FC = () => {
         </div>
 
       </main>
-
-      {/* Floating Action Button for Try On (Only visible in Try On tab with no results) */}
-      {activeTab === 'TRY_ON' && tryOnState.results.length === 0 && (
-          <div className="fixed bottom-[88px] left-0 right-0 px-6 max-w-md mx-auto z-30">
-            <button
-                onClick={() => handleGenerateTryOn(false)}
-                disabled={tryOnState.isLoading || !isolatedProduct || !modelImage}
-                className={`
-                w-full py-4 rounded-2xl font-bold text-white shadow-xl shadow-purple-900/20
-                flex items-center justify-center gap-3 transition-all duration-300 border border-white/20 backdrop-blur-sm
-                ${tryOnState.isLoading || !isolatedProduct || !modelImage
-                    ? 'bg-gray-800/80 cursor-not-allowed text-gray-400' 
-                    : 'bg-gray-900 hover:bg-black active:scale-[0.98]'}
-                `}
-            >
-                {tryOnState.isLoading ? (
-                <>
-                    <Loader2 className="animate-spin" size={20} />
-                    <span>Đang xử lý (15s)...</span>
-                </>
-                ) : (
-                <>
-                    <Sparkles size={20} className="text-yellow-300" />
-                    <span>Bắt đầu mặc thử</span>
-                </>
-                )}
-            </button>
-          </div>
-      )}
-
-      {/* Professional Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 pb-safe pt-2 z-50 shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
-        <div className="max-w-md mx-auto flex justify-between items-center h-16">
-          <button
-            onClick={() => setActiveTab('TRY_ON')}
-            className={`flex flex-col items-center gap-1 w-1/2 transition-all duration-300 ${
-              activeTab === 'TRY_ON' ? 'text-indigo-600 -translate-y-1' : 'text-gray-400'
-            }`}
-          >
-            <div className={`p-1.5 rounded-xl transition-colors ${activeTab === 'TRY_ON' ? 'bg-indigo-50' : 'bg-transparent'}`}>
-                <Shirt size={24} strokeWidth={activeTab === 'TRY_ON' ? 2.5 : 2} />
-            </div>
-            <span className="text-[10px] font-bold">Mặc Thử</span>
-          </button>
-
-          <div className="w-px h-8 bg-gray-100"></div>
-
-          <button
-            onClick={() => setActiveTab('BACKGROUND_EDIT')}
-            className={`flex flex-col items-center gap-1 w-1/2 transition-all duration-300 ${
-              activeTab === 'BACKGROUND_EDIT' ? 'text-purple-600 -translate-y-1' : 'text-gray-400'
-            }`}
-          >
-             <div className={`p-1.5 rounded-xl transition-colors ${activeTab === 'BACKGROUND_EDIT' ? 'bg-purple-50' : 'bg-transparent'}`}>
-                <Layers size={24} strokeWidth={activeTab === 'BACKGROUND_EDIT' ? 2.5 : 2} />
-            </div>
-            <span className="text-[10px] font-bold">Đổi Bối Cảnh</span>
-          </button>
-        </div>
-      </nav>
     </div>
   );
 };
