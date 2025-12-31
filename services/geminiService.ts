@@ -1,12 +1,13 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { AppConfig, ProcessedImage } from "../types";
 
-// Models
-const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
+// CHANGE: Switch to 2.0 Flash Experimental. 
+// Reason: The 2.5-flash-image model currently enforces "Limit: 0" on accounts without Billing (Free Tier locked).
+// 2.0-flash-exp is more permissive for free testing.
+const IMAGE_MODEL_NAME = 'gemini-2.0-flash-exp';
 const TEXT_MODEL_NAME = 'gemini-2.5-flash-latest';
 
-// Disable Safety Settings to prevent false blocks on mannequin/skin
-// (Google sometimes mistakes fashion photos for unsafe content)
+// Disable Safety Settings
 const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
   { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -36,8 +37,7 @@ const getClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
-// --- RETRY LOGIC (The "Backend" Simulation) ---
-// This mimics a backend queue by waiting and retrying if Google says "Too Many Requests"
+// --- RETRY LOGIC ---
 const callWithRetry = async (apiCall: () => Promise<any>, retries = 3, delay = 2000): Promise<any> => {
   try {
     return await apiCall();
@@ -45,11 +45,16 @@ const callWithRetry = async (apiCall: () => Promise<any>, retries = 3, delay = 2
     const isQuotaError = error.message?.includes("429") || error.message?.includes("Quota") || error.status === 429;
     const isOverloaded = error.message?.includes("503") || error.message?.includes("Overloaded");
     
+    // Check for "Limit: 0" specifically - this implies Billing Requirement, retrying won't fix it usually, but we try once.
+    const isZeroLimit = error.message?.includes("limit: 0");
+
+    if (isZeroLimit) {
+        throw new Error("BILLING_REQUIRED");
+    }
+
     if ((isQuotaError || isOverloaded) && retries > 0) {
       console.warn(`Gặp lỗi quá tải (429/503). Đang đợi ${delay}ms để thử lại... (Còn ${retries} lần)`);
-      // Wait for the delay
       await new Promise(resolve => setTimeout(resolve, delay));
-      // Retry with double the delay (Exponential Backoff)
       return callWithRetry(apiCall, retries - 1, delay * 2);
     }
     throw error;
@@ -64,7 +69,6 @@ export const isolateProductImage = async (productImageBase64: string): Promise<s
       Yêu cầu: Tách quần/áo ra khỏi nền. Đặt trên nền TRẮNG (#FFFFFF). Giữ nguyên chi tiết. Căn giữa.
     `;
 
-    // Wrap the API call in the retry logic
     const response = await callWithRetry(async () => {
       return await ai.models.generateContent({
         model: IMAGE_MODEL_NAME,
@@ -76,7 +80,7 @@ export const isolateProductImage = async (productImageBase64: string): Promise<s
         },
         config: {
           imageConfig: { aspectRatio: "1:1" },
-          safetySettings: SAFETY_SETTINGS, // Bypass safety filters
+          safetySettings: SAFETY_SETTINGS,
         }
       });
     });
@@ -93,6 +97,7 @@ export const isolateProductImage = async (productImageBase64: string): Promise<s
   } catch (error: any) {
     console.error("Isolate Error:", error);
     const errMsg = error.message || "";
+    if (errMsg === "BILLING_REQUIRED") throw error;
     if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
         throw new Error("QUOTA_EXCEEDED");
     }
@@ -117,7 +122,6 @@ export const generateTryOnImage = async (
 
     if (config.enableMannequin) promptText += ` Tạo thêm một ma nơ canh đứng cạnh.`;
 
-    // Wrap in retry logic
     const response = await callWithRetry(async () => {
       return await ai.models.generateContent({
         model: IMAGE_MODEL_NAME,
@@ -149,6 +153,7 @@ export const generateTryOnImage = async (
   } catch (error: any) {
     console.error("Try-On Error:", error);
     const errMsg = error.message || "";
+    if (errMsg === "BILLING_REQUIRED") throw error;
     if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
         throw new Error("QUOTA_EXCEEDED");
     }
@@ -161,7 +166,6 @@ export const suggestBackgrounds = async (imageBase64: string): Promise<string[]>
     const ai = getClient();
     const prompt = `Gợi ý 3 bối cảnh chụp ảnh thời trang (3 dòng ngắn gọn Tiếng Việt).`;
 
-    // Text requests are cheaper, but still good to retry
     const response = await callWithRetry(async () => {
         return await ai.models.generateContent({
             model: TEXT_MODEL_NAME,
@@ -173,7 +177,7 @@ export const suggestBackgrounds = async (imageBase64: string): Promise<string[]>
             },
             config: { safetySettings: SAFETY_SETTINGS }
         });
-    }, 2, 1000); // Fewer retries for text
+    }, 2, 1000); 
 
     const text = response.text || "";
     const suggestions = text.split('\n')
@@ -229,6 +233,7 @@ export const changeBackground = async (
   } catch (error: any) {
     console.error("Change Background Error:", error);
     const errMsg = error.message || "";
+    if (errMsg === "BILLING_REQUIRED") throw error;
     if (errMsg === "MISSING_API_KEY" || errMsg.includes("429") || errMsg.includes("Quota") || errMsg.includes("RESOURCE_EXHAUSTED")) {
         throw new Error("QUOTA_EXCEEDED");
     }

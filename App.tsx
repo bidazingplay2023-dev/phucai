@@ -14,6 +14,7 @@ const App: React.FC = () => {
   // Settings Modal State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isErrorTriggered, setIsErrorTriggered] = useState(false);
+  const [errorType, setErrorType] = useState<'QUOTA' | 'BILLING'>('QUOTA');
 
   // Step 1 Data
   const [productImage, setProductImage] = useState<ProcessedImage | null>(null);
@@ -34,8 +35,15 @@ const App: React.FC = () => {
   const handleError = (error: any, context: string) => {
     if (error.message === "QUOTA_EXCEEDED") {
         setIsErrorTriggered(true);
+        setErrorType('QUOTA');
         setIsSettingsOpen(true);
-        return "Vui lòng nhập API Key để tiếp tục.";
+        return "Vui lòng kiểm tra API Key.";
+    }
+    if (error.message === "BILLING_REQUIRED") {
+        setIsErrorTriggered(true);
+        setErrorType('BILLING');
+        setIsSettingsOpen(true);
+        return "Yêu cầu tài khoản có thanh toán.";
     }
     return context + ": " + error.message;
   };
@@ -107,6 +115,7 @@ const App: React.FC = () => {
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)} 
         isErrorTrigger={isErrorTriggered}
+        errorType={errorType}
       />
 
       {/* Professional Header */}
