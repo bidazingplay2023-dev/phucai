@@ -68,7 +68,7 @@ export const generateTryOnImage = async (
 
     Yêu cầu thực hiện:
     1. Thay trang phục hiện tại của người mẫu trong Ảnh 2 bằng trang phục trong Ảnh 1.
-    2. QUAN TRỌNG: Giữ nguyên khuôn mặt, màu da, dáng đứng và bối cảnh của Ảnh 2. KHÔNG ĐƯỢC thay đổi khuôn mặt.
+    2. QUAN TRỌNG: Giữ nguyên khuôn mặt, dáng đứng và bối cảnh của Ảnh 2. KHÔNG ĐƯỢC thay đổi khuôn mặt.
     3. Trang phục mới phải ôm sát cơ thể người mẫu một cách tự nhiên (realistic fit).
     4. Xử lý ánh sáng trên trang phục mới sao cho khớp với ánh sáng môi trường của Ảnh 2.
     `;
@@ -157,8 +157,7 @@ export const changeBackground = async (
     let finalPrompt = `
       Nhiệm vụ: Thay đổi bối cảnh (background).
       Yêu cầu: 
-      - Giữ nguyên người mẫu và trang phục từ ảnh gốc.
-      - Thay nền phía sau bằng: ${prompt}.
+      - Tách người mẫu và trang phục từ ảnh gốc sau đó thay nền phía sau bằng: ${prompt}.
       - Tỉ lệ ảnh: 9:16.
     `;
 
@@ -170,8 +169,7 @@ export const changeBackground = async (
     if (backgroundImage) {
       finalPrompt = `
         Nhiệm vụ: Ghép người mẫu vào nền mới.
-        - Lấy người mẫu từ ẢNH GỐC.
-        - Ghép vào ẢNH NỀN MỚI.
+        Tách người mẫu và trang phục từ ẢNH GỐC sau đó thay vào ẢNH NỀN MỚI
         - Xử lý bóng đổ và ánh sáng chân thực.
       `;
       parts.push({ text: "ẢNH NỀN MỚI:" });
