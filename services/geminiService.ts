@@ -311,11 +311,12 @@ export const generateVideoPrompt = async (apiKey: string, imageBase64: string): 
 export const generateSpeech = async (text: string, _voiceName: string): Promise<string> => {
   try {
     // 1. Create Request using Relative Proxy Path
+    // Using Authorization header as requested
     const response = await fetch(`${PROXY_BASE_URL}/v1/text-to-speech`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': EVERAI_API_KEY
+        'Authorization': `Bearer ${EVERAI_API_KEY}`
       },
       body: JSON.stringify({
         text: text,
@@ -327,7 +328,6 @@ export const generateSpeech = async (text: string, _voiceName: string): Promise<
     if (!response.ok) {
         let errText = await response.text();
         try {
-            // Try to parse error json if possible
             const errJson = JSON.parse(errText);
             errText = errJson.message || errJson.error || errText;
         } catch(e) {}
@@ -339,16 +339,11 @@ export const generateSpeech = async (text: string, _voiceName: string): Promise<
     // Check if it returns a file_url directly
     if (data.file_url || (data.data && data.data.file_url)) {
         const url = data.file_url || data.data.file_url;
-        // NOTE: The URL returned might be absolute (https://...). 
-        // We usually can't fetch it directly due to CORS unless EverAI allows it.
-        // If it fails, we might need to proxy the download too. 
-        // For now, let's try direct, and if it fails, the user might need to use a simple "Open Link" instead.
-        // Or we route it through our proxy if it matches the everai domain.
         return await fetchAudioAsBase64(url);
     }
     
     // If it returns an ID, we poll
-    const requestId = data.id || data.request_id;
+    const requestId = data.id || data.request_id || (data.result && data.result.id);
     if (!requestId) {
         throw new Error("Không tìm thấy ID request hoặc URL audio từ EverAI.");
     }
@@ -366,32 +361,43 @@ export const generateSpeech = async (text: string, _voiceName: string): Promise<
 };
 
 // Helper: Poll EverAI Request Status
+// Updated based on documentation: GET /v1/tts/{request_id}
 async function pollEverAIResult(requestId: string, maxAttempts = 15, intervalMs = 2000): Promise<string> {
     for (let i = 0; i < maxAttempts; i++) {
         await new Promise(r => setTimeout(r, intervalMs));
         
         try {
-            // Use relative path for polling too
-            const response = await fetch(`${PROXY_BASE_URL}/requests/${requestId}`, {
+            // Updated Endpoint: /v1/tts/${requestId}
+            const response = await fetch(`${PROXY_BASE_URL}/v1/tts/${requestId}`, {
                 method: 'GET',
-                headers: { 'x-api-key': EVERAI_API_KEY }
+                headers: { 
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${EVERAI_API_KEY}` 
+                }
             });
             
             if (response.ok) {
                 const data = await response.json();
                 
-                // Success cases
-                if (data.status === 'success' || data.status === 'done' || data.status === 'completed') {
-                     if (data.file_url) return data.file_url;
-                     if (data.data && data.data.file_url) return data.data.file_url;
-                }
-                // Failure cases
-                if (data.status === 'failed' || data.status === 'error') {
-                    throw new Error("EverAI xử lý thất bại.");
+                // Parse structure: { status: 1, result: { status: 'done', audio_link: '...' } }
+                if (data.status === 1 && data.result) {
+                    const taskStatus = data.result.status;
+                    
+                    if (taskStatus === 'done' && data.result.audio_link) {
+                        return data.result.audio_link;
+                    }
+                    
+                    if (taskStatus === 'failed') {
+                        throw new Error("EverAI trả về trạng thái lỗi (failed).");
+                    }
+                    // If 'processing', continue loop
+                } else if (data.status === 0 || data.error) {
+                    throw new Error(`EverAI lỗi: ${data.message || 'Unknown error'}`);
                 }
             }
-        } catch (e) {
+        } catch (e: any) {
             console.warn("Polling error", e);
+            if (e.message && e.message.includes("failed")) throw e;
         }
     }
     throw new Error("Timeout: EverAI xử lý quá lâu.");
@@ -399,16 +405,11 @@ async function pollEverAIResult(requestId: string, maxAttempts = 15, intervalMs 
 
 // Helper: Fetch Audio URL and convert to Base64
 async function fetchAudioAsBase64(url: string): Promise<string> {
-    // If the URL is absolute and CORS blocks it, we might need to proxy it.
-    // However, usually signed URLs from S3/GCS allow CORS. 
-    // If it is from everai.vn (api or www), we might need to strip and proxy.
     let fetchUrl = url;
     if (url.includes('everai.vn')) {
-        // Simple heuristic: route through our proxy if it's the API domain
-        // New Domain
+        // Rewrite to use local proxy to avoid CORS/SSL issues with the direct link
         fetchUrl = url.replace('https://www.everai.vn/api', PROXY_BASE_URL);
-        // Fallback for Old Domain (in case returned in data)
-        fetchUrl = fetchUrl.replace('https://api.everai.vn', PROXY_BASE_URL);
+        fetchUrl = fetchUrl.replace('https://api.everai.vn', PROXY_BASE_URL); // fallback
     }
 
     const response = await fetch(fetchUrl);
