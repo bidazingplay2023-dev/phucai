@@ -30,21 +30,29 @@ const createRequest = async (apiKey: string, text: string, voiceCode: string) =>
 
     // Handle non-200 HTTP status specifically
     if (!response.ok) {
+      // Check for Cloudflare specific 52x errors
+      if (response.status === 526) {
+         throw new Error("Lỗi kết nối SSL (526) giữa Proxy và EverAI. Vui lòng thử lại sau vài phút hoặc liên hệ quản trị viên.");
+      }
+      if (response.status >= 520 && response.status <= 529) {
+         throw new Error(`Lỗi kết nối Server (${response.status}). Hệ thống trung gian đang gặp sự cố.`);
+      }
+
       const errorText = await response.text();
       // Try to parse if it is JSON error
       try {
         const jsonError = JSON.parse(errorText);
-        throw new Error(jsonError.message || `HTTP ${response.status}`);
+        throw new Error(jsonError.message || `Lỗi API: ${response.status}`);
       } catch (e) {
-        // If html or plain text (like Cloudflare errors)
-        console.error("Raw API Error:", errorText);
-        throw new Error(`Server Error (${response.status}). Vui lòng kiểm tra lại Key hoặc thử lại sau.`);
+        // If html or plain text
+        console.error("Raw API Error Body:", errorText);
+        throw new Error(`Lỗi Server (${response.status}): ${errorText.substring(0, 100)}...`);
       }
     }
 
     const result: EverAiResponse = await response.json();
     if (result.code !== 200 || !result.data?.id) {
-      throw new Error(result.message || "Failed to create TTS request");
+      throw new Error(result.message || "Không lấy được ID yêu cầu từ EverAI.");
     }
 
     return result.data.id;
@@ -63,7 +71,7 @@ const checkStatus = async (apiKey: string, requestId: string): Promise<string> =
     }
   });
 
-  if (!response.ok) throw new Error("EverAI Check Status Failed");
+  if (!response.ok) throw new Error("Kiểm tra trạng thái thất bại.");
 
   const result: EverAiResponse = await response.json();
   return result.data?.status || 'failed';
@@ -78,13 +86,13 @@ const getResultUrl = async (apiKey: string, requestId: string): Promise<string> 
     }
   });
 
-  if (!response.ok) throw new Error("EverAI Get Result Failed");
+  if (!response.ok) throw new Error("Lấy link audio thất bại.");
 
   const result: EverAiResponse = await response.json();
   if (result.data?.url) {
     return result.data.url;
   }
-  throw new Error("No audio URL found in result");
+  throw new Error("Không tìm thấy link audio trong kết quả.");
 };
 
 // Main Orchestrator Function
@@ -97,7 +105,7 @@ export const generateSpeechEverAI = async (apiKey: string, text: string, voiceCo
 
     // Step 2: Poll for completion
     let attempts = 0;
-    const maxAttempts = 20; // 40 seconds max (2s interval)
+    const maxAttempts = 30; // Increased to 60 seconds
     
     while (attempts < maxAttempts) {
       await sleep(2000); // Wait 2s
@@ -109,32 +117,32 @@ export const generateSpeechEverAI = async (apiKey: string, text: string, voiceCo
         const audioUrl = await getResultUrl(apiKey, requestId);
         console.log("Audio URL:", audioUrl);
         
-        // Fetch audio data
-        // Use proxy for audio file as well to avoid CORS on the file storage
+        // Fetch audio data via proxy
         try {
             const proxyAudioUrl = `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(audioUrl)}`;
             const audioFileResp = await fetch(proxyAudioUrl, {
-                headers: { 'Authorization': `Bearer ${apiKey}` }
+                // Audio proxy generally doesn't need auth if url is public S3, but we pass if needed
+                // Usually EverAI urls are public signed urls.
             });
             
-            if (!audioFileResp.ok) throw new Error("Failed to download audio file");
+            if (!audioFileResp.ok) throw new Error("Không thể tải file audio.");
             
             const blob = await audioFileResp.blob();
             return await blobToBase64(blob);
         } catch (e) {
             console.error("Audio download failed", e);
-            throw new Error("Không thể tải file audio về từ server.");
+            throw new Error("Lỗi tải file âm thanh về trình duyệt.");
         }
       }
 
       if (status === 'failed') {
-        throw new Error("EverAI processing failed on server side.");
+        throw new Error("EverAI báo lỗi trong quá trình xử lý.");
       }
 
       attempts++;
     }
 
-    throw new Error("EverAI Request Timeout");
+    throw new Error("Quá thời gian chờ (Timeout). Vui lòng thử lại.");
 
   } catch (error: any) {
     console.error("EverAI Error:", error);
