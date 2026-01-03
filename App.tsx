@@ -1,19 +1,43 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultDisplay } from './components/ResultDisplay';
 import { BackgroundEditor } from './components/BackgroundEditor';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
 import { ProcessedImage, GenerationState, AppConfig, AppStep } from './types';
-import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, Download, RotateCcw } from 'lucide-react';
+import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, Download, RotateCcw, Key } from 'lucide-react';
 
 const App: React.FC = () => {
+  // --- API Key Management ---
+  const [apiKey, setApiKey] = useState<string>('');
+  const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    const storedKey = localStorage.getItem('GEMINI_API_KEY');
+    if (storedKey) {
+      setApiKey(storedKey);
+    } else {
+      setShowApiKeyModal(true);
+    }
+  }, []);
+
+  const handleSaveApiKey = (key: string) => {
+    if (key.trim().length > 0) {
+      localStorage.setItem('GEMINI_API_KEY', key);
+      setApiKey(key);
+      setShowApiKeyModal(false);
+    }
+  };
+
+  const handleChangeKey = () => {
+    setShowApiKeyModal(true);
+  };
+
   // Navigation State
   const [activeTab, setActiveTab] = useState<AppStep>('TRY_ON');
 
   // Step 1 Data
   const [productImage, setProductImage] = useState<ProcessedImage | null>(null);
-  const [isolatedProduct, setIsolatedProduct] = useState<string | null>(null); // New state for isolated product
+  const [isolatedProduct, setIsolatedProduct] = useState<string | null>(null);
   const [isIsolating, setIsIsolating] = useState(false);
 
   const [modelImage, setModelImage] = useState<ProcessedImage | null>(null);
@@ -30,11 +54,12 @@ const App: React.FC = () => {
   // Sub-step 1.1: Isolate Product
   const handleIsolateProduct = async () => {
     if (!productImage) return;
+    if (!apiKey) { setShowApiKeyModal(true); return; }
+
     setIsIsolating(true);
     setTryOnState(prev => ({ ...prev, error: null }));
     try {
-      // API Key is now handled internally by service via process.env.API_KEY
-      const result = await isolateProductImage(productImage.base64);
+      const result = await isolateProductImage(apiKey, productImage.base64);
       setIsolatedProduct(result);
     } catch (error: any) {
       setTryOnState(prev => ({ ...prev, error: "Lỗi tách nền: " + error.message }));
@@ -55,6 +80,8 @@ const App: React.FC = () => {
 
   // Sub-step 1.2: Try On
   const handleGenerateTryOn = async (isRegenerate: boolean = false) => {
+    if (!apiKey) { setShowApiKeyModal(true); return; }
+
     // Requires isolated product AND model image
     if (!isolatedProduct || !modelImage) {
       setTryOnState(prev => ({ ...prev, error: "Vui lòng hoàn thành bước chuẩn bị sản phẩm và chọn ảnh người mẫu." }));
@@ -64,7 +91,7 @@ const App: React.FC = () => {
     setTryOnState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
-      const resultBase64 = await generateTryOnImage(isolatedProduct, modelImage, config);
+      const resultBase64 = await generateTryOnImage(apiKey, isolatedProduct, modelImage, config);
       setTryOnState(prev => ({
         isLoading: false,
         results: isRegenerate ? [resultBase64, ...prev.results] : [resultBase64],
@@ -85,17 +112,15 @@ const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Partial Reset: Keeps product, resets model and results (User requested behavior for "Quay lại bước 1")
   const handlePartialReset = () => {
     setModelImage(null);
     setTryOnState({ isLoading: false, results: [], error: null });
   };
 
-  // Full Reset: Clears everything (New Header Button)
   const handleFullReset = () => {
     if (window.confirm("Bạn có chắc muốn làm mới toàn bộ ứng dụng không? Dữ liệu hiện tại sẽ bị mất.")) {
         setProductImage(null);
-        setIsolatedProduct(null); // Reset isolation
+        setIsolatedProduct(null);
         setModelImage(null);
         setTryOnState({ isLoading: false, results: [], error: null });
         setStep2BaseImage(null);
@@ -104,7 +129,52 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 pb-20">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 pb-20 relative">
+      
+      {/* API Key Modal */}
+      {showApiKeyModal && (
+        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full border border-indigo-100">
+            <div className="text-center mb-6">
+              <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-3">
+                <Key size={24} />
+              </div>
+              <h2 className="text-xl font-bold text-gray-800">Cấu hình Google Gemini API</h2>
+              <p className="text-sm text-gray-500 mt-2">
+                Để ứng dụng hoạt động, vui lòng nhập API Key của bạn từ Google AI Studio. Key sẽ được lưu trên trình duyệt của bạn.
+              </p>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Gemini API Key</label>
+                <input 
+                  type="password" 
+                  placeholder="AIzaSy..." 
+                  className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  defaultValue={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)} // Update state directly for instant feedback
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveApiKey((e.target as HTMLInputElement).value);
+                  }}
+                />
+              </div>
+              
+              <button 
+                onClick={() => handleSaveApiKey(apiKey)}
+                className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
+              >
+                Lưu & Bắt đầu
+              </button>
+              
+              <p className="text-xs text-center text-gray-400">
+                Chưa có Key? <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Lấy Key miễn phí tại đây</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100 shadow-sm">
         <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
@@ -119,9 +189,16 @@ const App: React.FC = () => {
           
           <div className="flex items-center gap-2">
               <button 
+                onClick={handleChangeKey}
+                className={`p-2 rounded-full transition-colors ${!apiKey ? 'bg-red-100 text-red-600 animate-pulse' : 'text-gray-500 hover:bg-gray-100'}`}
+                title="Cài đặt API Key"
+              >
+                <Settings2 size={18} />
+              </button>
+              <button 
                 onClick={handleFullReset}
-                className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors"
-                title="Làm mới (Reset)"
+                className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                title="Làm mới toàn bộ"
               >
                 <RotateCcw size={18} />
               </button>
@@ -213,12 +290,10 @@ const App: React.FC = () => {
                            <div className="relative w-full aspect-[3/4] rounded-xl border-2 border-green-200 bg-green-50 overflow-hidden group">
                               <img src={`data:image/png;base64,${isolatedProduct}`} className="w-full h-full object-contain p-2" alt="Isolated" />
                               
-                              {/* Status Icon - Moved to Left */}
                               <div className="absolute top-2 left-2 bg-green-500 text-white p-1 rounded-full shadow-md z-10">
                                  <CheckCircle2 size={12} />
                               </div>
 
-                              {/* Download Button - Added to Right */}
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleDownloadIsolated(); }}
                                 className="absolute top-2 right-2 bg-white text-gray-700 hover:text-indigo-600 hover:bg-indigo-50 p-2 rounded-full shadow-md transition-colors z-20"
@@ -329,6 +404,7 @@ const App: React.FC = () => {
         <div className={activeTab === 'BACKGROUND_EDIT' ? 'block animate-in fade-in duration-300' : 'hidden'}>
            <BackgroundEditor 
             initialBaseImage={step2BaseImage}
+            apiKey={apiKey}
           />
         </div>
 

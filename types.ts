@@ -24,7 +24,7 @@ export interface GeneratedBackground {
   isVideoPromptLoading: boolean;
   
   // New: Store generated audios for each script index
-  generatedAudios?: { [key: number]: string }; // Index -> Base64 WAV or URL
+  generatedAudios?: { [key: number]: string }; // Index -> Base64 WAV
   isAudioLoading?: { [key: number]: boolean }; // Index -> Loading state
 }
 
@@ -40,9 +40,4 @@ export interface BackgroundState {
   results: GeneratedBackground[]; 
   
   error: string | null;
-}
-
-export interface ApiKeys {
-  gemini: string;
-  everAi: string;
 }

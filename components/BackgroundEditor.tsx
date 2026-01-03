@@ -1,20 +1,15 @@
-
 import React, { useState, useEffect } from 'react';
-import { 
-  Sparkles, Loader2, Wand2, Image as ImageIcon, 
-  ChevronRight, Play, Volume2, Download, AlertCircle,
-  RotateCcw, Video, FileText, Check, ArrowLeft, Plus, Layers, ArrowRight
-} from 'lucide-react';
-import { suggestBackgrounds, changeBackground, generateVideoPrompt } from '../services/geminiService';
-import { generateSpeechEverAI } from '../services/everAiService';
-import { BackgroundState, ProcessedImage, GeneratedBackground } from '../types';
+import { ProcessedImage, BackgroundState, GeneratedBackground } from '../types';
+import { suggestBackgrounds, changeBackground, generateVideoPrompt, generateSpeech } from '../services/geminiService';
 import { ImageUploader } from './ImageUploader';
+import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Trash2, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play } from 'lucide-react';
 
 interface BackgroundEditorProps {
   initialBaseImage: string | null;
+  apiKey: string;
 }
 
-export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseImage }) => {
+export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseImage, apiKey }) => {
   const [state, setState] = useState<BackgroundState>({
     selectedBaseImage: initialBaseImage,
     backgroundImage: null,
@@ -26,86 +21,138 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     error: null,
   });
 
+  const [mode, setMode] = useState<'UPLOAD' | 'PROMPT' | 'KEEP'>('UPLOAD');
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [selectedVoice, setSelectedVoice] = useState('Puck');
+  const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
+  
+  // Accordion state: 'video' | 'voiceover' | null
+  const [openSection, setOpenSection] = useState<string | null>('video');
 
+  // TTS State - Voice selection is effectively disabled for EverAI in this version as code is hardcoded
+  const [selectedVoice, setSelectedVoice] = useState('Default (EverAI)');
+
+  // Sync prop to state if it changes
   useEffect(() => {
-    if (initialBaseImage && state.aiSuggestions.length === 0) {
-      handleGetSuggestions(initialBaseImage);
+    if (initialBaseImage) {
+      setState(prev => ({ 
+        ...prev, 
+        selectedBaseImage: initialBaseImage,
+        results: [], 
+        error: null,
+      }));
     }
   }, [initialBaseImage]);
 
-  const handleGetSuggestions = async (img: string) => {
-    setState(prev => ({ ...prev, isSuggesting: true }));
+  // Reset selected index when new results come in (usually prepended to top)
+  useEffect(() => {
+    if (state.results.length > 0) {
+        setSelectedIndex(0);
+        setOpenSection('video'); // Default open first section on new result
+    }
+  }, [state.results.length]);
+
+  const handleSuggest = async () => {
+    if (!state.selectedBaseImage) return;
+    setState(prev => ({ ...prev, isSuggesting: true, error: null }));
     try {
-      const suggestions = await suggestBackgrounds(img);
-      setState(prev => ({ ...prev, aiSuggestions: suggestions, isSuggesting: false }));
+      const suggestions = await suggestBackgrounds(apiKey, state.selectedBaseImage);
+      setState(prev => ({ ...prev, isSuggesting: false, aiSuggestions: suggestions }));
     } catch (err) {
-      setState(prev => ({ ...prev, isSuggesting: false }));
+      setState(prev => ({ ...prev, isSuggesting: false, error: "Không lấy được gợi ý." }));
     }
   };
 
-  const handleGenerate = async () => {
-    if (!state.selectedBaseImage) return;
-    setState(prev => ({ ...prev, isGenerating: true, error: null }));
-    try {
-      const resultBase64 = await changeBackground(
-        state.selectedBaseImage,
-        state.textPrompt,
-        state.backgroundImage
-      );
+  const handleGenerate = async (isRegenerate: boolean = false) => {
+    if (!state.selectedBaseImage) {
+        setState(prev => ({ ...prev, error: "Chưa có ảnh gốc để xử lý." }));
+        return;
+    }
 
-      const newResult: GeneratedBackground = {
-        base64: resultBase64,
-        videoPrompts: [],
-        voiceoverScripts: [],
-        isVideoPromptLoading: true,
+    if (mode === 'UPLOAD' && !state.backgroundImage) {
+      setState(prev => ({ ...prev, error: "Vui lòng tải ảnh nền lên." }));
+      return;
+    }
+    if (mode === 'PROMPT' && !state.textPrompt.trim()) {
+      setState(prev => ({ ...prev, error: "Vui lòng nhập mô tả bối cảnh." }));
+      return;
+    }
+
+    setState(prev => ({ ...prev, isGenerating: true, error: null }));
+    
+    try {
+      let resultBase64 = '';
+
+      // LOGIC BRANCH: If KEEP, use original image. Else, call AI to change background.
+      if (mode === 'KEEP') {
+         resultBase64 = state.selectedBaseImage;
+         // Small delay to simulate processing so user sees the loading state momentarily
+         await new Promise(resolve => setTimeout(resolve, 800));
+      } else {
+         const bgImageParam = mode === 'UPLOAD' ? state.backgroundImage : null;
+         const promptParam = mode === 'PROMPT' ? state.textPrompt : '';
+         resultBase64 = await changeBackground(apiKey, state.selectedBaseImage, promptParam, bgImageParam);
+      }
+      
+      // Create a new result object with loading state for prompts
+      const newResultItem: GeneratedBackground = {
+          base64: resultBase64,
+          videoPrompts: [],
+          voiceoverScripts: [],
+          isVideoPromptLoading: true,
+          generatedAudios: {},
+          isAudioLoading: {}
       };
 
-      setState(prev => ({
-        ...prev,
-        isGenerating: false,
-        results: [newResult, ...prev.results]
-      }));
-      setSelectedIndex(0);
-
-      // Trigger video prompt generation for the new result
-      handleGenerateContentForImage(resultBase64, 0);
-
-    } catch (error: any) {
-      setState(prev => ({ ...prev, isGenerating: false, error: error.message }));
-    }
-  };
-
-  const handleGenerateContentForImage = async (base64: string, index: number) => {
-    try {
-      const { videoPrompts, voiceoverScripts } = await generateVideoPrompt(base64);
+      // 1. Update UI with the image immediately
       setState(prev => {
-        const updated = [...prev.results];
-        if (updated[index]) {
-          updated[index] = {
-            ...updated[index],
-            videoPrompts,
-            voiceoverScripts,
-            isVideoPromptLoading: false
+          const updatedResults = isRegenerate ? [newResultItem, ...prev.results] : [newResultItem];
+          return { 
+            ...prev, 
+            isGenerating: false, 
+            results: updatedResults 
           };
-        }
-        return { ...prev, results: updated };
       });
-    } catch (err) {
-      console.error("Content generation error", err);
-      setState(prev => {
-        const updated = [...prev.results];
-        if (updated[index]) {
-          updated[index].isVideoPromptLoading = false;
-        }
-        return { ...prev, results: updated };
-      });
+
+      // 2. Automatically generate prompt for THIS specific image
+      try {
+        const contentResult = await generateVideoPrompt(apiKey, resultBase64);
+        
+        // Update the specific item in the results array
+        setState(prev => {
+            const updatedResults = prev.results.map(item => {
+                // Find the item by matching base64
+                if (item === newResultItem) {
+                    return { 
+                      ...item, 
+                      videoPrompts: contentResult.videoPrompts, 
+                      voiceoverScripts: contentResult.voiceoverScripts,
+                      isVideoPromptLoading: false 
+                    };
+                }
+                return item;
+            });
+            return { ...prev, results: updatedResults };
+        });
+      } catch (videoErr) {
+        console.error("Video prompt failed", videoErr);
+        setState(prev => {
+            const updatedResults = prev.results.map(item => {
+                if (item === newResultItem) {
+                    return { ...item, videoPrompts: ["Lỗi tạo nội dung."], voiceoverScripts: [], isVideoPromptLoading: false };
+                }
+                return item;
+            });
+            return { ...prev, results: updatedResults };
+        });
+      }
+
+    } catch (err: any) {
+      setState(prev => ({ ...prev, isGenerating: false, error: err.message }));
     }
   };
 
-  // Fixed handleGenerateAudio with proper scope variables
   const handleGenerateAudio = async (scriptIndex: number, text: string) => {
+    // Set Loading State for this script
     setState(prev => {
       const updatedResults = [...prev.results];
       const current = updatedResults[selectedIndex];
@@ -116,9 +163,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     });
 
     try {
-      // Keys are now obtained from environment variables within services
-      const audioBase64 = await generateSpeechEverAI(text, selectedVoice);
+      const audioBase64 = await generateSpeech(text, selectedVoice);
 
+      // Update Audio Data
       setState(prev => {
         const updatedResults = [...prev.results];
         const current = updatedResults[selectedIndex];
@@ -128,9 +175,10 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
         }
         return { ...prev, results: updatedResults };
       });
-    } catch (error) {
+    } catch (error: any) {
        console.error("Audio Gen Error", error);
-       alert("Lỗi: " + error);
+       alert("Lỗi khi tạo audio: " + error.message);
+       // Reset loading
        setState(prev => {
         const updatedResults = [...prev.results];
         const current = updatedResults[selectedIndex];
@@ -142,161 +190,497 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     }
   };
 
-  const currentResult = state.results[selectedIndex];
+  const handleDownload = () => {
+    if (state.results.length === 0) return;
+    const currentResult = state.results[selectedIndex];
+    const link = document.createElement('a');
+    link.href = `data:image/png;base64,${currentResult.base64}`;
+    link.download = `ai-bg-change-${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDownloadAudio = (base64Audio: string) => {
+    // Note: If EverAI returns MP3, but we treat it as WAV/Audio, browsers are usually smart enough.
+    // However, if the source is MP3, downloading as .wav might mislead players.
+    // For safety, we can use .mp3 if we suspect the source is mp3. 
+    // Since we don't strictly know, .wav or .mp3 works in most players.
+    const link = document.createElement('a');
+    link.href = `data:audio/mp3;base64,${base64Audio}`;
+    link.download = `voiceover-${Date.now()}.mp3`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(id);
+    setTimeout(() => setCopiedIndex(null), 1500);
+  };
+
+  const handleBaseImageUpload = (img: ProcessedImage | null) => {
+    setState(prev => ({ 
+      ...prev, 
+      selectedBaseImage: img ? img.base64 : null,
+      results: [],
+      error: null
+    }));
+  };
+
+  const clearBaseImage = () => {
+      setState(prev => ({ ...prev, selectedBaseImage: null, results: [] }));
+  };
+
+  const PROMPT_LABELS = [
+      "Mirror Selfie", 
+      "Outfit Check", 
+      "Gen Z Pose",
+      "Walking/Spinning",
+      "Playful"
+  ];
+
+  // Get current selected item safely
+  const currentItem = state.results[selectedIndex];
 
   return (
-    <div className="space-y-6">
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-        <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-          <Wand2 className="text-purple-600" size={24} />
-          Thay đổi bối cảnh
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="space-y-4">
-            <div className="relative aspect-[9/16] bg-gray-100 rounded-xl overflow-hidden border-2 border-dashed border-gray-300">
-              {state.selectedBaseImage ? (
-                <img src={`data:image/png;base64,${state.selectedBaseImage}`} className="w-full h-full object-contain" alt="Base" />
-              ) : (
-                <div className="flex items-center justify-center h-full text-gray-400">Chọn ảnh ở Bước 1 trước</div>
-              )}
-            </div>
-            
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-gray-700">Gợi ý từ AI</label>
-              <div className="flex flex-wrap gap-2">
-                {state.isSuggesting ? (
-                  <div className="flex items-center gap-2 text-indigo-600 text-xs font-medium animate-pulse">
-                    <Loader2 className="animate-spin" size={14} /> Đang nghĩ...
-                  </div>
-                ) : (
-                  state.aiSuggestions.map((s, i) => (
-                    <button 
-                      key={i}
-                      onClick={() => setState(prev => ({ ...prev, textPrompt: s }))}
-                      className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-medium hover:bg-indigo-100 transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))
-                )}
+    <div className="animate-in slide-in-from-right duration-500 pb-10">
+      
+      {/* CASE 1: NO BASE IMAGE SELECTED */}
+      {!state.selectedBaseImage ? (
+          <div className="flex flex-col items-center justify-center min-h-[300px] bg-white rounded-2xl border-2 border-dashed border-indigo-200 p-8 text-center space-y-4">
+              <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center">
+                  <Upload size={32} />
               </div>
-            </div>
+              <div>
+                  <h3 className="text-lg font-bold text-gray-800">Tải ảnh mẫu cần đổi nền</h3>
+                  <p className="text-sm text-gray-500 mt-1 max-w-xs mx-auto">
+                      Bạn có thể dùng kết quả từ bước "Mặc thử" hoặc tải ảnh trực tiếp từ máy lên đây.
+                  </p>
+              </div>
+              <div className="w-full max-w-xs">
+                 <ImageUploader 
+                    id="base-image-upload"
+                    label=""
+                    subLabel="Chọn ảnh (JPG/PNG)"
+                    image={null}
+                    onImageChange={handleBaseImageUpload}
+                 />
+              </div>
           </div>
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-gray-700">Mô tả bối cảnh mới</label>
-              <textarea
-                value={state.textPrompt}
-                onChange={(e) => setState(prev => ({ ...prev, textPrompt: e.target.value }))}
-                className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none h-32 text-sm"
-                placeholder="Ví dụ: Đứng trong một quán cafe sang trọng tại Paris..."
-              />
+      ) : (
+        /* CASE 2: HAS BASE IMAGE - SHOW EDITOR */
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Left Column: Inputs */}
+            <div className="space-y-6">
+            
+            {/* Base Image Preview with Change Option */}
+            <div className="relative group flex gap-4 items-start bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+                <img 
+                src={`data:image/png;base64,${state.selectedBaseImage}`} 
+                className="w-20 h-auto rounded-lg object-contain bg-gray-50 border" 
+                alt="Base"
+                />
+                <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900">Ảnh gốc đang xử lý</p>
+                    <button 
+                        onClick={clearBaseImage}
+                        className="text-xs text-red-500 flex items-center gap-1 mt-2 hover:bg-red-50 px-2 py-1 rounded-md transition-colors"
+                    >
+                        <Trash2 size={12} /> Thay ảnh khác
+                    </button>
+                </div>
             </div>
 
-            <div className="space-y-2">
-               <label className="text-sm font-semibold text-gray-700">Hoặc tải ảnh nền riêng</label>
-               <ImageUploader 
-                 id="bg-upload"
-                 label="" 
-                 subLabel="Ảnh nền tuỳ chỉnh"
-                 image={state.backgroundImage}
-                 onImageChange={(img) => setState(prev => ({ ...prev, backgroundImage: img }))}
-               />
+            <div className="border-t border-gray-200 my-2"></div>
+
+            {/* Mode Selection Tabs */}
+            <div className="flex p-1 bg-gray-100 rounded-xl">
+                <button
+                onClick={() => setMode('UPLOAD')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all duration-200 ${
+                    mode === 'UPLOAD' 
+                    ? 'bg-white shadow text-indigo-600' 
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
+                }`}
+                >
+                <Image size={16} />
+                Dùng ảnh nền
+                </button>
+                <button
+                onClick={() => setMode('PROMPT')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all duration-200 ${
+                    mode === 'PROMPT' 
+                    ? 'bg-white shadow text-indigo-600' 
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
+                }`}
+                >
+                <Type size={16} />
+                Mô tả AI
+                </button>
+                <button
+                onClick={() => setMode('KEEP')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all duration-200 ${
+                    mode === 'KEEP' 
+                    ? 'bg-white shadow text-indigo-600' 
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
+                }`}
+                >
+                <MonitorPlay size={16} />
+                Giữ nguyên
+                </button>
             </div>
+
+            {/* Option A: Custom Background Image */}
+            {mode === 'UPLOAD' && (
+                <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-800 mb-2">
+                    <strong>Chế độ:</strong> Sử dụng ảnh nền có sẵn của bạn. AI sẽ ghép người mẫu vào ảnh này.
+                </div>
+                <ImageUploader
+                    id="bg-upload"
+                    label="Tải ảnh nền"
+                    subLabel="Tải ảnh phong cảnh, studio..."
+                    image={state.backgroundImage}
+                    onImageChange={(img) => setState(prev => ({ ...prev, backgroundImage: img }))}
+                />
+                </div>
+            )}
+
+            {/* Option B: Text Prompt & Suggestions */}
+            {mode === 'PROMPT' && (
+                <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-800 mb-2">
+                    <strong>Chế độ:</strong> AI sẽ vẽ bối cảnh dựa trên mô tả của bạn.
+                </div>
+                <div className="flex justify-between items-center">
+                    <span className="text-sm font-semibold text-gray-700">Mô tả bối cảnh</span>
+                    <button 
+                        onClick={handleSuggest}
+                        disabled={state.isSuggesting}
+                        className="text-xs flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg hover:bg-indigo-100 transition-colors"
+                    >
+                        {state.isSuggesting ? <Loader2 size={12} className="animate-spin" /> : <Lightbulb size={12} />}
+                        Gợi ý cho tôi
+                    </button>
+                </div>
+
+                {state.aiSuggestions.length > 0 && (
+                    <div className="flex flex-wrap gap-2 animate-in fade-in">
+                    {state.aiSuggestions.map((sugg, idx) => (
+                        <button
+                        key={idx}
+                        onClick={() => setState(prev => ({ ...prev, textPrompt: sugg }))}
+                        className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-3 py-1.5 rounded-full hover:bg-purple-100 transition-colors text-left"
+                        >
+                        {sugg}
+                        </button>
+                    ))}
+                    </div>
+                )}
+
+                <textarea
+                    value={state.textPrompt}
+                    onChange={(e) => setState(prev => ({ ...prev, textPrompt: e.target.value }))}
+                    placeholder="Ví dụ: Đứng giữa cánh đồng hoa hướng dương, ánh nắng rực rỡ..."
+                    className="w-full p-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm h-24 resize-none"
+                />
+                </div>
+            )}
+
+             {/* Option C: Keep Original (New) */}
+             {mode === 'KEEP' && (
+                <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-indigo-100 rounded-lg p-4 text-sm text-indigo-800 mb-2 flex gap-3">
+                         <div className="bg-white p-2 rounded-full h-fit shadow-sm text-indigo-600">
+                            <MonitorPlay size={20} />
+                         </div>
+                         <div>
+                            <strong className="block mb-1">Chế độ tạo Prompt Video</strong>
+                            <p className="text-xs opacity-90 leading-relaxed">
+                                Hệ thống sẽ giữ nguyên ảnh hiện tại và chỉ tập trung phân tích để viết kịch bản Video & Lời thoại bán hàng.
+                            </p>
+                         </div>
+                    </div>
+                </div>
+            )}
+
+            {state.error && (
+                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-lg flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-red-600" />
+                {state.error}
+                </div>
+            )}
 
             <button
-              onClick={handleGenerate}
-              disabled={state.isGenerating || !state.selectedBaseImage}
-              className="w-full py-4 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 hover:scale-[1.02] transition-all disabled:opacity-50"
+                onClick={() => handleGenerate(false)}
+                disabled={state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)}
+                className={`
+                w-full py-3.5 px-6 rounded-xl font-bold text-white shadow-lg
+                flex items-center justify-center gap-2 transition-all
+                ${state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)
+                    ? 'bg-gray-400 cursor-not-allowed' 
+                    : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98]'}
+                `}
             >
-              {state.isGenerating ? <Loader2 className="animate-spin" /> : <Sparkles />}
-              {state.isGenerating ? 'Đang tạo bối cảnh (20s)...' : 'Bắt đầu thay nền'}
+                {state.isGenerating && state.results.length === 0 ? (
+                <>
+                    <Loader2 className="animate-spin" size={20} />
+                    <span>Đang xử lý...</span>
+                </>
+                ) : (
+                <>
+                    {mode === 'KEEP' ? <Video size={20} /> : <Sparkles size={20} />}
+                    <span>
+                        {mode === 'UPLOAD' ? 'Ghép vào nền này' : mode === 'PROMPT' ? 'Tạo bối cảnh mới' : 'Tạo Prompt Video ngay'}
+                    </span>
+                </>
+                )}
             </button>
-          </div>
-        </div>
-      </div>
+            </div>
 
-      {state.results.length > 0 && (
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-in">
-           <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-bold text-gray-800">Kết quả bối cảnh</h3>
-              <div className="flex gap-2">
-                {state.results.map((_, i) => (
-                  <button 
-                    key={i}
-                    onClick={() => setSelectedIndex(i)}
-                    className={`w-3 h-3 rounded-full transition-all ${i === selectedIndex ? 'bg-indigo-600 w-8' : 'bg-gray-300'}`}
-                  />
-                ))}
-              </div>
-           </div>
+            {/* Right Column: Result */}
+            <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200 flex flex-col min-h-[500px]">
+            {state.results.length > 0 && currentItem ? (
+                <div className="w-full flex flex-col gap-4 animate-in zoom-in-95 duration-300 h-full">
+                
+                {/* Main Image View */}
+                <div className="relative w-full aspect-[9/16] rounded-xl overflow-hidden shadow-lg bg-gray-900 group">
+                    <img 
+                        src={`data:image/png;base64,${currentItem.base64}`} 
+                        className="w-full h-full object-contain"
+                        alt="Final Result"
+                    />
+                </div>
 
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="aspect-[9/16] bg-gray-900 rounded-2xl overflow-hidden shadow-xl">
-                 <img src={`data:image/png;base64,${currentResult.base64}`} className="w-full h-full object-contain" alt="Result" />
-              </div>
-
-              <div className="space-y-6">
-                 {currentResult.isVideoPromptLoading ? (
-                    <div className="flex flex-col items-center justify-center h-40 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
-                       <Loader2 className="animate-spin text-indigo-600 mb-2" />
-                       <span className="text-sm text-gray-500 font-medium">Đang phân tích kịch bản Video...</span>
-                    </div>
-                 ) : (
-                    <>
-                      <div className="space-y-3">
-                         <h4 className="flex items-center gap-2 font-bold text-gray-800"><Video size={18} className="text-indigo-600"/> Gợi ý Video (Prompts)</h4>
-                         <div className="space-y-2">
-                            {currentResult.videoPrompts.map((p, i) => (
-                               <div key={i} className="p-3 bg-gray-50 rounded-lg text-xs text-gray-700 border border-gray-100 hover:border-indigo-200 transition-colors">
-                                  {p}
-                               </div>
-                            ))}
-                         </div>
-                      </div>
-
-                      <div className="space-y-4">
-                         <div className="flex items-center justify-between">
-                            <h4 className="flex items-center gap-2 font-bold text-gray-800"><FileText size={18} className="text-purple-600"/> Kịch bản Voiceover</h4>
-                            <select 
-                              value={selectedVoice} 
-                              onChange={(e) => setSelectedVoice(e.target.value)}
-                              className="text-xs border rounded-lg p-1 outline-none"
+                {/* Thumbnails */}
+                {state.results.length > 1 && (
+                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                        {state.results.map((res, idx) => (
+                            <button
+                            key={idx}
+                            onClick={() => setSelectedIndex(idx)}
+                            className={`relative flex-shrink-0 w-14 h-20 rounded-md overflow-hidden border-2 transition-all ${
+                                idx === selectedIndex ? 'border-indigo-600 ring-2 ring-indigo-100' : 'border-transparent opacity-60 hover:opacity-100'
+                            }`}
                             >
-                               <option value="Puck">Giọng Nam (Puck)</option>
-                               <option value="Kore">Giọng Nữ (Kore)</option>
-                               <option value="Charon">Giọng Trầm (Charon)</option>
-                            </select>
-                         </div>
-                         
-                         <div className="space-y-4">
-                            {currentResult.voiceoverScripts.map((script, i) => (
-                               <div key={i} className="p-4 bg-purple-50 rounded-xl border border-purple-100 space-y-3">
-                                  <p className="text-sm italic text-gray-700 leading-relaxed">"{script}"</p>
-                                  <div className="flex items-center justify-end gap-2">
-                                     {currentResult.generatedAudios?.[i] ? (
-                                        <audio controls src={`data:audio/wav;base64,${currentResult.generatedAudios[i]}`} className="h-8 w-48" />
-                                     ) : (
-                                        <button
-                                          onClick={() => handleGenerateAudio(i, script)}
-                                          disabled={currentResult.isAudioLoading?.[i]}
-                                          className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold hover:bg-purple-700 transition-all disabled:opacity-50"
-                                        >
-                                           {currentResult.isAudioLoading?.[i] ? <Loader2 size={14} className="animate-spin" /> : <Volume2 size={14} />}
-                                           Tạo Audio
-                                        </button>
-                                     )}
-                                  </div>
-                               </div>
-                            ))}
-                         </div>
-                      </div>
-                    </>
-                 )}
-              </div>
-           </div>
+                            <img 
+                                src={`data:image/png;base64,${res.base64}`} 
+                                className="w-full h-full object-cover" 
+                                alt={`Thumb ${idx}`}
+                            />
+                            {idx === selectedIndex && (
+                                <div className="absolute inset-0 bg-indigo-900/10 flex items-center justify-center">
+                                <Check size={12} className="text-white drop-shadow-md" />
+                                </div>
+                            )}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                {/* Content Generation Result - ACCORDION STYLE */}
+                <div className="bg-white rounded-xl border border-indigo-100 shadow-sm overflow-hidden animate-in slide-in-from-bottom-4 transition-all">
+                    
+                    {currentItem.isVideoPromptLoading ? (
+                        <div className="p-4 flex flex-col items-center justify-center gap-3 py-8 text-gray-500">
+                            <Loader2 size={24} className="animate-spin text-indigo-600" />
+                            <p className="text-sm">Đang phân tích hình ảnh và viết kịch bản...</p>
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-gray-100">
+                             {/* Accordion 1: Video Prompts */}
+                             <div>
+                                <button 
+                                    onClick={() => setOpenSection(openSection === 'video' ? null : 'video')}
+                                    className={`w-full flex items-center justify-between p-3.5 text-sm font-bold text-gray-800 hover:bg-gray-50 transition-colors ${openSection === 'video' ? 'bg-gray-50' : ''}`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div className="bg-gradient-to-r from-pink-500 to-orange-500 text-white p-1 rounded-md">
+                                            <Video size={14} />
+                                        </div>
+                                        Kịch bản Video (Prompt Video)
+                                    </div>
+                                    {openSection === 'video' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                </button>
+                                
+                                {openSection === 'video' && (
+                                    <div className="p-3 bg-gray-50/50 space-y-2 animate-in slide-in-from-top-2 duration-200">
+                                        {currentItem.videoPrompts && currentItem.videoPrompts.length > 0 ? (
+                                            currentItem.videoPrompts.map((prompt, idx) => {
+                                                const promptId = `vid-${idx}`;
+                                                const isCopied = copiedIndex === promptId;
+                                                return (
+                                                <div key={idx} className="flex items-center justify-between p-2.5 bg-white border border-gray-200 rounded-lg shadow-sm gap-3 group hover:border-indigo-200 transition-all">
+                                                    <div className="flex items-center gap-2 overflow-hidden flex-1" title={prompt}>
+                                                        <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 bg-gray-100 px-2 py-1 rounded-md min-w-fit">
+                                                            {PROMPT_LABELS[idx] || `OPT ${idx + 1}`}
+                                                        </div>
+                                                        <div className="text-xs text-gray-600 truncate flex-1 select-all cursor-text">
+                                                            {prompt}
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <button 
+                                                        onClick={() => copyToClipboard(prompt, promptId)}
+                                                        className={`p-1.5 rounded-md transition-all shrink-0 flex items-center justify-center gap-1 ${
+                                                            isCopied 
+                                                            ? 'bg-green-500 text-white shadow-md' 
+                                                            : 'bg-gray-100 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
+                                                        }`}
+                                                        title="Sao chép"
+                                                    >
+                                                        {isCopied ? <Check size={14} strokeWidth={3} /> : <Copy size={14} />}
+                                                    </button>
+                                                </div>
+                                            )})
+                                        ) : (
+                                            <div className="text-xs text-red-500 p-2">Không có prompt nào được tạo.</div>
+                                        )}
+                                    </div>
+                                )}
+                             </div>
+
+                             {/* Accordion 2: Voiceover Scripts & Audio Gen */}
+                             <div>
+                                <button 
+                                    onClick={() => setOpenSection(openSection === 'voiceover' ? null : 'voiceover')}
+                                    className={`w-full flex items-center justify-between p-3.5 text-sm font-bold text-gray-800 hover:bg-gray-50 transition-colors ${openSection === 'voiceover' ? 'bg-gray-50' : ''}`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-1 rounded-md">
+                                            <Mic size={14} />
+                                        </div>
+                                        Lời thoại & Thu âm (EverAI)
+                                    </div>
+                                    {openSection === 'voiceover' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                </button>
+                                
+                                {openSection === 'voiceover' && (
+                                    <div className="p-3 bg-gray-50/50 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                                        
+                                        {/* Voice Selector Info */}
+                                        <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-gray-200 shadow-sm">
+                                            <label className="text-xs font-semibold text-gray-600 ml-1">Giọng đọc (Cố định):</label>
+                                            <span className="text-xs font-mono bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                                                EverAI (voice-e7bc94bb)
+                                            </span>
+                                        </div>
+
+                                        {currentItem.voiceoverScripts && currentItem.voiceoverScripts.length > 0 ? (
+                                            currentItem.voiceoverScripts.map((script, idx) => {
+                                                const scriptId = `voice-${idx}`;
+                                                const isCopied = copiedIndex === scriptId;
+                                                const isAudioLoading = currentItem.isAudioLoading?.[idx];
+                                                const audioData = currentItem.generatedAudios?.[idx];
+
+                                                return (
+                                                <div key={idx} className="flex flex-col p-3 bg-white border border-gray-200 rounded-lg shadow-sm gap-3 group hover:border-indigo-200 transition-all">
+                                                    {/* Header: Option label + Copy */}
+                                                    <div className="flex justify-between items-center gap-2">
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider text-white bg-indigo-400 px-2 py-0.5 rounded-md">
+                                                            Kịch bản {idx + 1}
+                                                        </span>
+                                                        <button 
+                                                            onClick={() => copyToClipboard(script, scriptId)}
+                                                            className={`p-1.5 rounded-md transition-all shrink-0 flex items-center justify-center gap-1 ${
+                                                                isCopied 
+                                                                ? 'bg-green-500 text-white shadow-md' 
+                                                                : 'bg-gray-100 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
+                                                            }`}
+                                                            title="Sao chép văn bản"
+                                                        >
+                                                            {isCopied ? <Check size={14} strokeWidth={3} /> : <Copy size={14} />}
+                                                        </button>
+                                                    </div>
+                                                    
+                                                    {/* Script Content */}
+                                                    <div className="text-xs text-gray-700 leading-relaxed italic select-all cursor-text bg-gray-50 p-2 rounded border border-gray-100">
+                                                        "{script}"
+                                                    </div>
+
+                                                    {/* Audio Controls */}
+                                                    <div className="pt-2 border-t border-gray-100 flex items-center gap-2">
+                                                        {!audioData ? (
+                                                            <button 
+                                                                onClick={() => handleGenerateAudio(idx, script)}
+                                                                disabled={isAudioLoading}
+                                                                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                                                    isAudioLoading 
+                                                                    ? 'bg-gray-100 text-gray-400' 
+                                                                    : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                                                }`}
+                                                            >
+                                                                {isAudioLoading ? (
+                                                                    <Loader2 size={12} className="animate-spin" />
+                                                                ) : (
+                                                                    <Play size={12} fill="currentColor" />
+                                                                )}
+                                                                {isAudioLoading ? 'Đang tạo audio...' : 'Tạo Audio'}
+                                                            </button>
+                                                        ) : (
+                                                            <div className="flex-1 flex flex-col gap-2">
+                                                                {/* Use mp3 type for EverAI usually */}
+                                                                <audio controls src={`data:audio/mp3;base64,${audioData}`} className="w-full h-8" />
+                                                                <button
+                                                                    onClick={() => handleDownloadAudio(audioData)}
+                                                                    className="flex items-center justify-center gap-1.5 w-full py-1.5 text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 rounded-md transition-colors"
+                                                                >
+                                                                    <Download size={12} /> Tải Audio
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )})
+                                        ) : (
+                                            <div className="text-xs text-red-500 p-2">Không có lời thoại nào được tạo.</div>
+                                        )}
+                                    </div>
+                                )}
+                             </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Actions Grid */}
+                <div className="grid grid-cols-2 gap-3 mt-auto">
+                    <button 
+                        onClick={() => handleGenerate(true)}
+                        disabled={state.isGenerating}
+                        className={`
+                        flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-all active:scale-[0.98]
+                        ${state.isGenerating ? 'opacity-70 cursor-wait' : ''}
+                        `}
+                    >
+                        {state.isGenerating ? (
+                        <RefreshCw size={20} className="animate-spin" />
+                        ) : (
+                        <Plus size={20} />
+                        )}
+                        {state.isGenerating ? 'Đang tạo...' : 'Tạo thêm'}
+                    </button>
+
+                    <button 
+                        onClick={handleDownload}
+                        className="flex items-center justify-center gap-2 bg-green-600 text-white py-3 px-4 rounded-xl font-semibold hover:bg-green-700 transition-colors shadow-md active:scale-[0.98]"
+                    >
+                        <Download size={20} />
+                        Tải ảnh
+                    </button>
+                </div>
+                </div>
+            ) : (
+                <div className="text-center text-gray-400 flex flex-col items-center justify-center flex-grow h-full">
+                <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-4">
+                    <Sparkles size={32} className="text-gray-400" />
+                </div>
+                <p className="font-medium">Kết quả sẽ hiện ở đây</p>
+                <p className="text-sm mt-1">Chọn bối cảnh và nhấn tạo</p>
+                </div>
+            )}
+            </div>
         </div>
       )}
     </div>
