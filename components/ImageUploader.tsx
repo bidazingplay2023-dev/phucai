@@ -20,10 +20,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processFile = async (file: File) => {
     if (!file.type.startsWith('image/')) {
       alert('Vui lòng chỉ tải lên tệp hình ảnh.');
       return;
@@ -39,37 +36,48 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     }
   };
 
-  const handleRemove = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (image) {
-      URL.revokeObjectURL(image.previewUrl);
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await processFile(file);
     }
-    onImageChange(null);
-    if (inputRef.current) {
-      inputRef.current.value = '';
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        const file = items[i].getAsFile();
+        if (file) {
+          e.preventDefault(); // Prevent pasting text if any
+          await processFile(file);
+          return;
+        }
+      }
     }
   };
 
   return (
     <div className="w-full">
-      <div className="flex justify-between items-center mb-2">
-        <label className="text-sm font-semibold text-gray-700 block">
-          {label}
-        </label>
-        {image && (
-          <button 
-            onClick={handleRemove}
-            className="text-xs text-red-500 font-medium hover:text-red-700 flex items-center gap-1"
-          >
-            <X size={12} /> Xoá ảnh
-          </button>
-        )}
-      </div>
+      {label && (
+        <div className="flex justify-between items-center mb-2">
+          <label className="text-sm font-semibold text-gray-700 block">
+            {label}
+          </label>
+        </div>
+      )}
       
       <div 
-        className={`relative w-full aspect-[3/4] rounded-xl border-2 transition-all duration-300 overflow-hidden group cursor-pointer
+        tabIndex={0} // Make div focusable to receive paste events
+        onPaste={handlePaste}
+        className={`relative w-full aspect-[3/4] rounded-xl border-2 transition-all duration-300 overflow-hidden group cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent
           ${image ? 'border-indigo-500 bg-gray-50' : 'border-dashed border-gray-300 bg-white hover:border-indigo-400 hover:bg-indigo-50'}`}
-        onClick={() => !image && inputRef.current?.click()}
+        onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            inputRef.current?.click();
+          }
+        }}
       >
         <input 
           type="file" 
@@ -88,23 +96,23 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
               className="w-full h-full object-cover"
             />
             {/* Overlay for change hint */}
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-              <span className="text-white font-medium text-sm bg-black/50 px-3 py-1 rounded-full">
-                Nhấn để xoá & thay đổi
+            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center">
+              <span className="opacity-0 group-hover:opacity-100 transition-opacity text-white font-medium text-xs bg-black/60 px-3 py-1.5 rounded-full backdrop-blur-sm flex items-center gap-1">
+                <ImageIcon size={12} />
+                Thay đổi ảnh
               </span>
             </div>
-            {/* Change trigger logic needs to be careful not to conflict with remove button. 
-                Currently click triggers remove handled by parent click if no image, but here image exists.
-                Let's keep it simple: Click removes logic is separate. Re-clicking container does nothing if image exists to avoid accidental replace.
-            */}
           </div>
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mb-3 text-indigo-600">
+            <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mb-3 text-indigo-600 group-hover:scale-110 transition-transform">
               <Upload size={24} />
             </div>
             <span className="text-sm font-medium text-gray-900">Tải ảnh lên</span>
-            <span className="text-xs text-gray-500 mt-1">{subLabel}</span>
+            <span className="text-xs text-gray-500 mt-1 block">
+                {subLabel} <br/>
+                <span className="text-indigo-500 font-semibold opacity-80">hoặc dán ảnh (Ctrl+V)</span>
+            </span>
           </div>
         )}
       </div>

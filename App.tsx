@@ -4,7 +4,7 @@ import { ResultDisplay } from './components/ResultDisplay';
 import { BackgroundEditor } from './components/BackgroundEditor';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
 import { ProcessedImage, GenerationState, AppConfig, AppStep } from './types';
-import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, Download, RotateCcw } from 'lucide-react';
 
 const App: React.FC = () => {
   // Navigation State
@@ -41,6 +41,16 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDownloadIsolated = () => {
+    if (!isolatedProduct) return;
+    const link = document.createElement('a');
+    link.href = `data:image/png;base64,${isolatedProduct}`;
+    link.download = `isolated-product-${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // Sub-step 1.2: Try On
   const handleGenerateTryOn = async (isRegenerate: boolean = false) => {
     // Requires isolated product AND model image
@@ -73,11 +83,22 @@ const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const resetTryOn = () => {
-    setProductImage(null);
-    setIsolatedProduct(null); // Reset isolation
+  // Partial Reset: Keeps product, resets model and results (User requested behavior for "Quay lại bước 1")
+  const handlePartialReset = () => {
     setModelImage(null);
     setTryOnState({ isLoading: false, results: [], error: null });
+  };
+
+  // Full Reset: Clears everything (New Header Button)
+  const handleFullReset = () => {
+    if (window.confirm("Bạn có chắc muốn làm mới toàn bộ ứng dụng không? Dữ liệu hiện tại sẽ bị mất.")) {
+        setProductImage(null);
+        setIsolatedProduct(null); // Reset isolation
+        setModelImage(null);
+        setTryOnState({ isLoading: false, results: [], error: null });
+        setStep2BaseImage(null);
+        setActiveTab('TRY_ON');
+    }
   };
 
   return (
@@ -93,8 +114,18 @@ const App: React.FC = () => {
               Fashion AI
             </h1>
           </div>
-          <div className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">
-            Gemini 2.5
+          
+          <div className="flex items-center gap-2">
+              <button 
+                onClick={handleFullReset}
+                className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                title="Làm mới toàn bộ (Reset App)"
+              >
+                <RotateCcw size={18} />
+              </button>
+              <div className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">
+                Gemini 2.5
+              </div>
           </div>
         </div>
       </header>
@@ -182,9 +213,21 @@ const App: React.FC = () => {
                         ) : isolatedProduct ? (
                            <div className="relative w-full aspect-[3/4] rounded-xl border-2 border-green-200 bg-green-50 overflow-hidden group">
                               <img src={`data:image/png;base64,${isolatedProduct}`} className="w-full h-full object-contain p-2" alt="Isolated" />
-                              <div className="absolute top-2 right-2 bg-green-500 text-white p-1 rounded-full shadow-md">
+                              
+                              {/* Status Icon - Moved to Left */}
+                              <div className="absolute top-2 left-2 bg-green-500 text-white p-1 rounded-full shadow-md z-10">
                                  <CheckCircle2 size={12} />
                               </div>
+
+                              {/* Download Button - Added to Right */}
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleDownloadIsolated(); }}
+                                className="absolute top-2 right-2 bg-white text-gray-700 hover:text-indigo-600 hover:bg-indigo-50 p-2 rounded-full shadow-md transition-colors z-20"
+                                title="Tải ảnh tách nền"
+                              >
+                                 <Download size={14} />
+                              </button>
+
                               <div className="absolute bottom-0 inset-x-0 bg-green-600/90 text-white text-[10px] py-1 text-center font-medium">
                                 Đã tách nền
                               </div>
@@ -277,7 +320,7 @@ const App: React.FC = () => {
                 results={tryOnState.results} 
                 isRegenerating={tryOnState.isLoading}
                 onRegenerate={() => handleGenerateTryOn(true)}
-                onReset={resetTryOn} 
+                onReset={handlePartialReset} 
                 onSelectForBackground={handleSelectForBackground}
               />
             )}

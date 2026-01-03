@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, RefreshCw, Layers, Plus, Check, ArrowRight } from 'lucide-react';
+import { Download, RefreshCw, Layers, Plus, Check, ArrowRight, ArrowLeft } from 'lucide-react';
 
 interface ResultDisplayProps {
   results: string[];
@@ -47,9 +47,10 @@ export const ResultDisplay: React.FC<ResultDisplayProps> = ({
         <div className="flex gap-2">
            <button 
             onClick={onReset}
-            className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors font-medium"
+            className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors font-medium flex items-center gap-1"
           >
-            Tải ảnh khác
+            <ArrowLeft size={16} />
+            Quay lại
           </button>
         </div>
       </div>

@@ -118,8 +118,15 @@ export const suggestBackgrounds = async (imageBase64: string): Promise<string[]>
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
-      Gợi ý 3 bối cảnh chụp ảnh thời trang phù hợp cho trang phục trong ảnh này. 
-      Trả về danh sách 3 dòng ngắn gọn bằng Tiếng Việt.
+      Bạn là một giám đốc nghệ thuật. Hãy gợi ý 3 bối cảnh (background) chụp ảnh thời trang phù hợp nhất cho bộ trang phục trong ảnh này.
+      
+      Yêu cầu đầu ra:
+      - Chỉ trả về một JSON Array chứa 3 chuỗi string.
+      - Nội dung mỗi chuỗi phải Ngắn gọn, súc tích (dưới 10 từ).
+      - KHÔNG có lời dẫn, không đánh số.
+      
+      Ví dụ output mong muốn:
+      ["Sảnh tòa nhà hiện đại", "Quán cafe phong cách Vintage", "Đường phố Tokyo về đêm"]
     `;
 
     const response = await ai.models.generateContent({
@@ -129,16 +136,30 @@ export const suggestBackgrounds = async (imageBase64: string): Promise<string[]>
            { inlineData: { mimeType: "image/png", data: imageBase64 } },
            { text: prompt }
         ]
+      },
+      config: {
+        responseMimeType: "application/json"
       }
     });
 
     const text = response.text || "";
-    const suggestions = text.split('\n')
-      .map(line => line.replace(/^\d+[\.\)]\s*|-\s*/, '').trim())
-      .filter(line => line.length > 5)
-      .slice(0, 3);
-      
-    return suggestions.length > 0 ? suggestions : ["Studio hiện đại", "Đường phố năng động", "Quán cafe sang trọng"];
+    
+    try {
+      // Clean potential markdown blocks if API returns ```json ... ```
+      const cleanedText = text.replace(/```json|```/g, '').trim();
+      const json = JSON.parse(cleanedText);
+      if (Array.isArray(json)) {
+        return json.map(item => String(item).trim());
+      }
+      return ["Studio phông trắng", "Đường phố hiện đại", "Quán cafe sang trọng"];
+    } catch (e) {
+      console.warn("JSON Parse Error for suggestions", e);
+      // Fallback parser if JSON fails
+      return text.split('\n')
+        .map(line => line.replace(/^\d+[\.\)]\s*|-\s*/, '').trim())
+        .filter(line => line.length > 0 && line.length < 50 && !line.includes("Dưới đây"))
+        .slice(0, 3);
+    }
   } catch (error) {
     console.error("Suggestion Error:", error);
     return ["Nền màu be tối giản", "Đường phố thành thị", "Nội thất sang trọng"];
@@ -157,8 +178,9 @@ export const changeBackground = async (
     let finalPrompt = `
       Nhiệm vụ: Thay đổi bối cảnh (background).
       Yêu cầu: 
-      - Tách người mẫu và trang phục từ ảnh gốc sau đó thay nền phía sau bằng: ${prompt}.
+      - Xác định người mẫu và trang phục từ ẢNH GỐC để tách ra sau đó thay nền phía sau bằng: ${prompt}.
       - Tỉ lệ ảnh: 9:16.
+      Lưu ý: Giữ nguyên khuôn mặt của người mẫu tuyệt đối không thay đổi khuôn mặt người mẫu
     `;
 
     const parts: any[] = [
@@ -169,8 +191,10 @@ export const changeBackground = async (
     if (backgroundImage) {
       finalPrompt = `
         Nhiệm vụ: Ghép người mẫu vào nền mới.
-        Tách người mẫu và trang phục từ ẢNH GỐC sau đó thay vào ẢNH NỀN MỚI
-        - Xử lý bóng đổ và ánh sáng chân thực.
+        Xác định người mẫu và trang phục từ ẢNH GỐC để tách ra đó thay vào ẢNH NỀN MỚI này
+        + Xử lý bóng đổ và ánh sáng chân thực.
+        + Xử lí ảnh tách người mẫu ghép sang khung nền ảnh mới phải vừa vặn nhìn phù hợp với ẢNH NỀN MỚI.
+        Lưu ý: Giữ nguyên khuôn mặt của người mẫu tuyệt đối không thay đổi khuôn mặt người mẫu
       `;
       parts.push({ text: "ẢNH NỀN MỚI:" });
       parts.push({ inlineData: { mimeType: backgroundImage.file.type, data: backgroundImage.base64 } });
@@ -202,23 +226,37 @@ export const changeBackground = async (
   }
 };
 
-// NEW: Analyze image to generate 3 Video Prompts
-export const generateVideoPrompt = async (imageBase64: string): Promise<string[]> => {
+// NEW: Analyze image to generate 5 Video Prompts AND 2 Voiceover Scripts
+export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
-    Phân tích bức ảnh này và tạo ra 3 prompt mô tả hành động phù hợp nhất gần đúng nhất cho bức ảnh này để tôi ném sang Google Labs tạo video.
-    Lưu ý trọng tâm mô tả về chuyển động người mẫu và tương tác với sản phẩm
-    Yêu cầu :
-    Ví dụ các tuỳ chọn có thể như:
-   + Tùy chọn 1 (Tinh tế): Chuyển động nhẹ nhàng (thở, tóc đung đưa, tay chỉnh váy).
-   + Tùy chọn 2 (Trưng bày): Xoay hoặc quay 360 độ để hiển thị toàn bộ trang phục.
-   + Tùy chọn 3 (Máy quay): Chuyển động máy quay điện ảnh (Phóng to/thu nhỏ hoặc lia máy).
+    Phân tích bức ảnh này và thực hiện 2 nhiệm vụ:
 
-    Định dạng trả về:
-    CHỈ TRẢ VỀ MỘT JSON ARRAY chứa 3 chuỗi string. Không giải thích thêm.
-    Ví dụ: ["Prompt 1...", "Prompt 2...", "Prompt 3..."]
+    NHIỆM VỤ 1: Viết 5 Video Prompts (Mô tả hành động Image-to-Video)
+    - Tạo 5 prompt tiếng Anh ngắn gọn dùng cho các AI Video Generator.
+    - Phong cách: Gen Z, Trẻ trung, Năng động, "Slay".
+    - ƯU TIÊN TUYỆT ĐỐI: Mô tả các hành động quay video bằng điện thoại trước gương (Mirror Selfie) hoặc khoe Outfit (Outfit Check).
+    - 5 tuỳ chọn cụ thể cần viết:
+      1. Mirror Selfie (Mô tả người mẫu cầm điện thoại quay trước gương, lắc nhẹ người, nghiêng đầu dễ thương).
+      2. Outfit Check (Mô tả camera zoom nhẹ vào chi tiết quần áo, người mẫu vuốt tóc hoặc chỉnh áo).
+      3. Gen Z Pose (Tạo dáng ngầu, che mặt một chút hoặc nháy mắt, chuyển động tự nhiên).
+      4. Tóc Hông (Xoay ngang hông vuốt tóc nhẹ nhàng).
+      5. Playful (Vui vẻ, nghiêng 1 chút mặt, năng lượng tích cực).
+
+    NHIỆM VỤ 2:  Đóng vai một TikToker/Reviewer thời trang Gen Z nổi tiếng. 
+    Hãy viết 2 kịch bản voiceover ngắn (khoảng 30s) để bán sản phẩm, trang phục trong ảnh.
+    Phong cách ngôn ngữ (BẮT BUỘC):
+    - Dùng từ lóng (slang) giới trẻ, tự nhiên, thân mật. 
+    - Ví dụ từ vựng: "mấy bà", "keo lỳ", "chấn động", "tôn dáng xỉu", "hack chân", "chốt đơn", "outfit này", "tui thề".
+    - Giọng điệu hào hứng, như đang rủ bạn thân đi mua sắm.
+
+    ĐỊNH DẠNG ĐẦU RA (JSON BẮT BUỘC):
+    {
+      "videoPrompts": ["Prompt 1...", "Prompt 2...", "Prompt 3...", "Prompt 4...", "Prompt 5..."],
+      "voiceoverScripts": ["Lời thoại 1...", "Lời thoại 2..."]
+    }
     `;
 
     const response = await ai.models.generateContent({
@@ -235,23 +273,23 @@ export const generateVideoPrompt = async (imageBase64: string): Promise<string[]
     });
 
     const text = response.text;
-    if (!text) return ["Failed to generate prompts."];
+    if (!text) return { videoPrompts: ["Failed to generate."], voiceoverScripts: [] };
 
     try {
-      // Clean potential markdown blocks if API returns ```json ... ```
       const cleanedText = text.replace(/```json|```/g, '').trim();
       const json = JSON.parse(cleanedText);
-      if (Array.isArray(json)) {
-        return json.map(item => String(item));
-      }
-      return [cleanedText];
+      
+      const videoPrompts = Array.isArray(json.videoPrompts) ? json.videoPrompts.map((s: any) => String(s)) : [];
+      const voiceoverScripts = Array.isArray(json.voiceoverScripts) ? json.voiceoverScripts.map((s: any) => String(s)) : [];
+
+      return { videoPrompts, voiceoverScripts };
     } catch (e) {
-      console.warn("Failed to parse JSON prompt response, returning raw text", e);
-      return [text];
+      console.warn("Failed to parse JSON prompt response", e);
+      return { videoPrompts: ["Error parsing response"], voiceoverScripts: [] };
     }
 
   } catch (error: any) {
-    console.error("Video Prompt Generation Error:", error);
-    return [`Lỗi khi tạo prompt video: ${error.message || "Unknown error"}`];
+    console.error("Video Content Generation Error:", error);
+    return { videoPrompts: [`Lỗi: ${error.message}`], voiceoverScripts: [] };
   }
 };

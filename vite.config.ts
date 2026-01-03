@@ -8,6 +8,15 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        // Configure proxy to bypass CORS during development
+        proxy: {
+          '/api/everai': {
+            target: 'https://www.everai.vn/api/v1',
+            changeOrigin: true,
+            secure: false,
+            rewrite: (path) => path.replace(/^\/api\/everai/, '')
+          }
+        }
       },
       plugins: [react()],
       define: {
