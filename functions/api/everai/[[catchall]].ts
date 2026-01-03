@@ -1,80 +1,86 @@
 // Cloudflare Pages Function
-// This acts as a proxy to bypass CORS restrictions from the browser.
-// It intercepts requests to /api/everai/* and forwards them to https://api.everai.vn/*
+// Proxy strict mode to fix SSL 526 and CORS
 
 export async function onRequest(context) {
   const { request, params } = context;
-  const requestUrl = new URL(request.url);
+  const url = new URL(request.url);
 
-  // 1. HEADER CLEANING (QUAN TRỌNG: Sửa lỗi 526 Invalid SSL)
-  // Chúng ta phải loại bỏ header 'Host' vì nó chứa domain của Cloudflare Pages (phucai.pages.dev)
-  // nhưng server EverAI yêu cầu Host phải là 'api.everai.vn'.
-  const proxyHeaders = new Headers();
-  for (const [key, value] of request.headers) {
-    const k = key.toLowerCase();
-    // Loại bỏ các header định danh nguồn gây lỗi SSL/SNI
-    if (!['host', 'origin', 'referer', 'cf-connecting-ip', 'cf-ipcountry', 'x-forwarded-for', 'x-forwarded-proto', 'cookie'].includes(k)) {
-      proxyHeaders.append(key, value);
-    }
+  // 1. Xử lý Preflight (OPTIONS)
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      },
+    });
   }
 
-  // 2. PATH HANDLING
   const path = params.catchall ? (Array.isArray(params.catchall) ? params.catchall.join('/') : params.catchall) : '';
 
-  // 3. SPECIAL FEATURE: Audio Proxy (Xử lý tải file MP3 bypass CORS)
-  // Được gọi bởi service: /api/everai/audio-proxy?url=...
+  // 2. AUDIO PROXY: Tải file MP3/WAV về và trả lại cho Client (Bypass CORS)
   if (path === 'audio-proxy') {
-    const targetAudioUrl = requestUrl.searchParams.get('url');
-    if (!targetAudioUrl) return new Response("Missing 'url' param", { status: 400 });
+    const targetAudioUrl = url.searchParams.get('url');
+    if (!targetAudioUrl) return new Response("Missing url", { status: 400 });
 
     try {
-        // Fetch file audio gốc (thường là từ S3/Google Storage của EverAI)
-        const audioResponse = await fetch(targetAudioUrl, { method: 'GET' });
-        
-        // Trả về file với CORS header thoải mái
-        const newResponse = new Response(audioResponse.body, audioResponse);
-        newResponse.headers.set('Access-Control-Allow-Origin', '*');
-        return newResponse;
+      const audioResponse = await fetch(targetAudioUrl);
+      const newResponse = new Response(audioResponse.body, audioResponse);
+      newResponse.headers.set("Access-Control-Allow-Origin", "*");
+      return newResponse;
     } catch (e) {
-        return new Response(JSON.stringify({ error: "Audio fetch failed: " + e.message }), { status: 500 });
+      return new Response("Audio fetch failed", { status: 500 });
     }
   }
 
-  // 4. API PROXY LOGIC (Chuyển tiếp yêu cầu đến EverAI API)
-  const targetUrl = `https://api.everai.vn/${path}${requestUrl.search}`;
+  // 3. API PROXY: Gọi API EverAI
+  const targetUrl = `https://api.everai.vn/${path}${url.search}`;
+
+  // TẠO HEADER MỚI TINH (Quan trọng để fix lỗi 526)
+  // Tuyệt đối không copy toàn bộ header từ request cũ sang.
+  const newHeaders = new Headers();
   
+  // Chỉ lấy những cái cần thiết
+  const contentType = request.headers.get("Content-Type");
+  if (contentType) newHeaders.set("Content-Type", contentType);
+
+  const auth = request.headers.get("Authorization");
+  if (auth) newHeaders.set("Authorization", auth);
+
+  // Ép buộc Host phải là api.everai.vn để khớp chứng chỉ SSL
+  newHeaders.set("Host", "api.everai.vn");
+  newHeaders.set("User-Agent", "FashionAI-Proxy/1.0");
+
   const newRequest = new Request(targetUrl, {
     method: request.method,
-    headers: proxyHeaders, // Sử dụng headers đã được làm sạch
+    headers: newHeaders,
     body: request.body,
-    redirect: 'follow',
+    redirect: "follow",
   });
 
   try {
     const response = await fetch(newRequest);
     
-    // Tạo response mới để thêm CORS headers cho trình duyệt
-    const newResponse = new Response(response.body, response);
-    
-    newResponse.headers.set('Access-Control-Allow-Origin', '*');
-    newResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    newResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    // Đọc body trả về
+    const body = await response.arrayBuffer();
+
+    // Tạo response trả về Client với CORS headers
+    const newResponse = new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: {
+        "Content-Type": response.headers.get("Content-Type") || "application/json",
+        "Access-Control-Allow-Origin": "*", // Cho phép mọi domain
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      }
+    });
 
     return newResponse;
   } catch (e) {
-    return new Response(JSON.stringify({ error: "Proxy Error: " + e.message }), { status: 500 });
+    return new Response(JSON.stringify({ error: e.message }), { 
+        status: 500,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
-}
-
-// Xử lý preflight request (OPTIONS)
-export async function onRequestOptions() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Max-Age': '86400',
-    },
-  });
 }
