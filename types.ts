@@ -20,13 +20,12 @@ export type AppStep = 'TRY_ON' | 'BACKGROUND_EDIT';
 export interface GeneratedBackground {
   base64: string;
   videoPrompts: string[];
-  voiceoverScripts: string[]; 
-  
-  // New fields for Audio/TTS
-  voiceoverAudios: (string | null)[]; // Stores Blob URLs for the audio files
-  isVoiceoverLoading: boolean[]; // Stores loading state for each script index
-  
+  voiceoverScripts: string[]; // Added: Store voiceover scripts
   isVideoPromptLoading: boolean;
+  
+  // New: Store generated audios for each script index
+  generatedAudios?: { [key: number]: string }; // Index -> Base64 WAV
+  isAudioLoading?: { [key: number]: boolean }; // Index -> Loading state
 }
 
 export interface BackgroundState {

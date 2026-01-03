@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { ProcessedImage, BackgroundState, GeneratedBackground } from '../types';
-import { suggestBackgrounds, changeBackground, generateVideoPrompt } from '../services/geminiService';
-import { generateSpeech } from '../services/ttsService';
+import { suggestBackgrounds, changeBackground, generateVideoPrompt, generateSpeech } from '../services/geminiService';
 import { ImageUploader } from './ImageUploader';
-import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Trash2, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play, Volume2 } from 'lucide-react';
+import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Trash2, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play } from 'lucide-react';
 
 interface BackgroundEditorProps {
   initialBaseImage: string | null;
@@ -27,6 +26,10 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   
   // Accordion state: 'video' | 'voiceover' | null
   const [openSection, setOpenSection] = useState<string | null>('video');
+
+  // TTS State
+  const [selectedVoice, setSelectedVoice] = useState('Kore');
+  const VOICES = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
 
   // Sync prop to state if it changes
   useEffect(() => {
@@ -91,14 +94,13 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       }
       
       // Create a new result object with loading state for prompts
-      // Initialize audio arrays as empty
       const newResultItem: GeneratedBackground = {
           base64: resultBase64,
           videoPrompts: [],
           voiceoverScripts: [],
-          voiceoverAudios: [],
-          isVoiceoverLoading: [],
-          isVideoPromptLoading: true
+          isVideoPromptLoading: true,
+          generatedAudios: {},
+          isAudioLoading: {}
       };
 
       // 1. Update UI with the image immediately
@@ -120,14 +122,10 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
             const updatedResults = prev.results.map(item => {
                 // Find the item by matching base64
                 if (item === newResultItem) {
-                    const scriptsCount = contentResult.voiceoverScripts.length;
                     return { 
                       ...item, 
                       videoPrompts: contentResult.videoPrompts, 
                       voiceoverScripts: contentResult.voiceoverScripts,
-                      // Initialize audio arrays with correct length (nulls and false)
-                      voiceoverAudios: new Array(scriptsCount).fill(null),
-                      isVoiceoverLoading: new Array(scriptsCount).fill(false),
                       isVideoPromptLoading: false 
                     };
                 }
@@ -153,61 +151,43 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     }
   };
 
-  const handleCreateVoice = async (scriptText: string, scriptIndex: number) => {
-      const resultIndex = selectedIndex; // Capture current result index
-      
-      // Set loading state for this specific voiceover
-      setState(prev => {
-          const newResults = [...prev.results];
-          const target = newResults[resultIndex];
-          if (target && target.isVoiceoverLoading) {
-             const newLoading = [...target.isVoiceoverLoading];
-             newLoading[scriptIndex] = true;
-             newResults[resultIndex] = { ...target, isVoiceoverLoading: newLoading };
-          }
-          return { ...prev, results: newResults };
-      });
-
-      try {
-          // Call the TTS Service
-          const audioUrl = await generateSpeech(scriptText);
-
-          // Update state with audio URL
-          setState(prev => {
-            const newResults = [...prev.results];
-            const target = newResults[resultIndex];
-            if (target) {
-               const newAudios = [...target.voiceoverAudios];
-               const newLoading = [...target.isVoiceoverLoading];
-               
-               newAudios[scriptIndex] = audioUrl;
-               newLoading[scriptIndex] = false;
-
-               newResults[resultIndex] = { 
-                   ...target, 
-                   voiceoverAudios: newAudios,
-                   isVoiceoverLoading: newLoading 
-               };
-            }
-            return { ...prev, results: newResults };
-        });
-
-      } catch (err: any) {
-          // Use alert for now but with better formatting for the long error message
-          alert(err.message);
-          
-          // Reset loading state
-          setState(prev => {
-            const newResults = [...prev.results];
-            const target = newResults[resultIndex];
-            if (target) {
-               const newLoading = [...target.isVoiceoverLoading];
-               newLoading[scriptIndex] = false;
-               newResults[resultIndex] = { ...target, isVoiceoverLoading: newLoading };
-            }
-            return { ...prev, results: newResults };
-        });
+  const handleGenerateAudio = async (scriptIndex: number, text: string) => {
+    // Set Loading State for this script
+    setState(prev => {
+      const updatedResults = [...prev.results];
+      const current = updatedResults[selectedIndex];
+      if (current) {
+        current.isAudioLoading = { ...current.isAudioLoading, [scriptIndex]: true };
       }
+      return { ...prev, results: updatedResults };
+    });
+
+    try {
+      const audioBase64 = await generateSpeech(text, selectedVoice);
+
+      // Update Audio Data
+      setState(prev => {
+        const updatedResults = [...prev.results];
+        const current = updatedResults[selectedIndex];
+        if (current) {
+          current.generatedAudios = { ...current.generatedAudios, [scriptIndex]: audioBase64 };
+          current.isAudioLoading = { ...current.isAudioLoading, [scriptIndex]: false };
+        }
+        return { ...prev, results: updatedResults };
+      });
+    } catch (error) {
+       console.error("Audio Gen Error", error);
+       alert("Lỗi khi tạo audio: " + error);
+       // Reset loading
+       setState(prev => {
+        const updatedResults = [...prev.results];
+        const current = updatedResults[selectedIndex];
+        if (current) {
+          current.isAudioLoading = { ...current.isAudioLoading, [scriptIndex]: false };
+        }
+        return { ...prev, results: updatedResults };
+      });
+    }
   };
 
   const handleDownload = () => {
@@ -221,35 +201,14 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     document.body.removeChild(link);
   };
 
-  const handleDownloadAudio = async (url: string | null, index: number) => {
-      if (!url) return;
-      try {
-        // Fetch the file as a blob to force download and avoid "open in new tab" issues with cross-origin
-        const response = await fetch(url);
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        link.download = `voiceover-${index + 1}-${Date.now()}.mp3`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        // Clean up
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
-      } catch (e) {
-        console.error("Download failed, falling back to direct link", e);
-        // Fallback: direct link (might open in new tab)
-        const link = document.createElement('a');
-        link.href = url;
-        link.target = "_blank"; // Open in new tab if download fails
-        link.download = `voiceover-${index + 1}.mp3`; 
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
-  }
+  const handleDownloadAudio = (base64Audio: string) => {
+    const link = document.createElement('a');
+    link.href = `data:audio/wav;base64,${base64Audio}`;
+    link.download = `voiceover-${selectedVoice}-${Date.now()}.wav`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -579,7 +538,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 )}
                              </div>
 
-                             {/* Accordion 2: Voiceover Scripts */}
+                             {/* Accordion 2: Voiceover Scripts & Audio Gen */}
                              <div>
                                 <button 
                                     onClick={() => setOpenSection(openSection === 'voiceover' ? null : 'voiceover')}
@@ -589,76 +548,87 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                         <div className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-1 rounded-md">
                                             <Mic size={14} />
                                         </div>
-                                        Lời thoại Gen Z (Voiceover)
+                                        Lời thoại & Thu âm (TTS)
                                     </div>
                                     {openSection === 'voiceover' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                 </button>
                                 
                                 {openSection === 'voiceover' && (
-                                    <div className="p-3 bg-gray-50/50 space-y-2 animate-in slide-in-from-top-2 duration-200">
+                                    <div className="p-3 bg-gray-50/50 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                                        
+                                        {/* Voice Selector */}
+                                        <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-gray-200 shadow-sm">
+                                            <label className="text-xs font-semibold text-gray-600 ml-1">Chọn giọng đọc AI:</label>
+                                            <select 
+                                                value={selectedVoice} 
+                                                onChange={(e) => setSelectedVoice(e.target.value)}
+                                                className="text-xs border-none bg-indigo-50 text-indigo-700 font-bold rounded px-2 py-1 focus:ring-0 cursor-pointer hover:bg-indigo-100 transition-colors"
+                                            >
+                                                {VOICES.map(v => <option key={v} value={v}>{v}</option>)}
+                                            </select>
+                                        </div>
+
                                         {currentItem.voiceoverScripts && currentItem.voiceoverScripts.length > 0 ? (
                                             currentItem.voiceoverScripts.map((script, idx) => {
                                                 const scriptId = `voice-${idx}`;
                                                 const isCopied = copiedIndex === scriptId;
-                                                const audioUrl = currentItem.voiceoverAudios?.[idx];
-                                                const isLoadingAudio = currentItem.isVoiceoverLoading?.[idx];
+                                                const isAudioLoading = currentItem.isAudioLoading?.[idx];
+                                                const audioData = currentItem.generatedAudios?.[idx];
 
                                                 return (
                                                 <div key={idx} className="flex flex-col p-3 bg-white border border-gray-200 rounded-lg shadow-sm gap-3 group hover:border-indigo-200 transition-all">
-                                                    {/* Header Line: Label + Copy Button */}
-                                                    <div className="flex justify-between items-center gap-2 border-b border-gray-100 pb-2">
+                                                    {/* Header: Option label + Copy */}
+                                                    <div className="flex justify-between items-center gap-2">
                                                         <span className="text-[10px] font-bold uppercase tracking-wider text-white bg-indigo-400 px-2 py-0.5 rounded-md">
-                                                            Option {idx + 1}
+                                                            Kịch bản {idx + 1}
                                                         </span>
                                                         <button 
                                                             onClick={() => copyToClipboard(script, scriptId)}
-                                                            className={`text-xs flex items-center gap-1 transition-colors ${isCopied ? 'text-green-600 font-bold' : 'text-gray-400 hover:text-indigo-600'}`}
+                                                            className={`p-1.5 rounded-md transition-all shrink-0 flex items-center justify-center gap-1 ${
+                                                                isCopied 
+                                                                ? 'bg-green-500 text-white shadow-md' 
+                                                                : 'bg-gray-100 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
+                                                            }`}
                                                             title="Sao chép văn bản"
                                                         >
-                                                            {isCopied ? <Check size={12} strokeWidth={3} /> : <Copy size={12} />}
-                                                            {isCopied ? 'Đã sao chép' : 'Sao chép'}
+                                                            {isCopied ? <Check size={14} strokeWidth={3} /> : <Copy size={14} />}
                                                         </button>
                                                     </div>
-
+                                                    
                                                     {/* Script Content */}
-                                                    <div className="text-xs text-gray-700 leading-relaxed italic select-all cursor-text">
+                                                    <div className="text-xs text-gray-700 leading-relaxed italic select-all cursor-text bg-gray-50 p-2 rounded border border-gray-100">
                                                         "{script}"
                                                     </div>
-                                                    
-                                                    {/* Audio Controls Area */}
-                                                    <div className="mt-1 pt-2 border-t border-dashed border-gray-200 flex items-center justify-between">
-                                                        {audioUrl ? (
-                                                            <div className="flex items-center gap-2 w-full animate-in fade-in">
-                                                                <audio controls src={audioUrl} className="h-8 w-full max-w-[180px]" />
+
+                                                    {/* Audio Controls */}
+                                                    <div className="pt-2 border-t border-gray-100 flex items-center gap-2">
+                                                        {!audioData ? (
+                                                            <button 
+                                                                onClick={() => handleGenerateAudio(idx, script)}
+                                                                disabled={isAudioLoading}
+                                                                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                                                                    isAudioLoading 
+                                                                    ? 'bg-gray-100 text-gray-400' 
+                                                                    : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                                                }`}
+                                                            >
+                                                                {isAudioLoading ? (
+                                                                    <Loader2 size={12} className="animate-spin" />
+                                                                ) : (
+                                                                    <Play size={12} fill="currentColor" />
+                                                                )}
+                                                                {isAudioLoading ? 'Đang tạo audio...' : 'Tạo Audio'}
+                                                            </button>
+                                                        ) : (
+                                                            <div className="flex-1 flex flex-col gap-2">
+                                                                <audio controls src={`data:audio/wav;base64,${audioData}`} className="w-full h-8" />
                                                                 <button
-                                                                    onClick={() => handleDownloadAudio(audioUrl, idx)}
-                                                                    className="ml-auto p-1.5 text-white bg-green-500 rounded-full hover:bg-green-600 shadow-sm transition-colors"
-                                                                    title="Tải MP3"
+                                                                    onClick={() => handleDownloadAudio(audioData)}
+                                                                    className="flex items-center justify-center gap-1.5 w-full py-1.5 text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 rounded-md transition-colors"
                                                                 >
-                                                                    <Download size={14} />
+                                                                    <Download size={12} /> Tải Audio ({selectedVoice})
                                                                 </button>
                                                             </div>
-                                                        ) : (
-                                                            <button 
-                                                                onClick={() => handleCreateVoice(script, idx)}
-                                                                disabled={isLoadingAudio}
-                                                                className={`
-                                                                    w-full flex items-center justify-center gap-2 py-2 rounded-md text-xs font-bold border transition-all
-                                                                    ${isLoadingAudio 
-                                                                        ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' 
-                                                                        : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50 hover:border-indigo-300 shadow-sm'}
-                                                                `}
-                                                            >
-                                                                {isLoadingAudio ? (
-                                                                    <>
-                                                                        <Loader2 size={12} className="animate-spin" /> Đang tạo voice...
-                                                                    </>
-                                                                ) : (
-                                                                    <>
-                                                                        <Volume2 size={14} /> Tạo Voice (MP3)
-                                                                    </>
-                                                                )}
-                                                            </button>
                                                         )}
                                                     </div>
                                                 </div>
@@ -696,7 +666,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                         className="flex items-center justify-center gap-2 bg-green-600 text-white py-3 px-4 rounded-xl font-semibold hover:bg-green-700 transition-colors shadow-md active:scale-[0.98]"
                     >
                         <Download size={20} />
-                        Tải về
+                        Tải ảnh
                     </button>
                 </div>
                 </div>

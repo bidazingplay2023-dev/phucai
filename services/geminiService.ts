@@ -1,10 +1,13 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { AppConfig, ProcessedImage } from "../types";
+import { addWavHeader } from "./utils";
 
 // REVERT: Back to Gemini 2.5 Flash Image as requested
 const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
 // Model for Text Analysis - Updated to avoid 404 on deprecated/invalid model names
 const TEXT_MODEL_NAME = 'gemini-3-flash-preview';
+// Model for TTS
+const TTS_MODEL_NAME = 'gemini-2.5-flash-preview-tts';
 
 // GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm
 export const isolateProductImage = async (productImageBase64: string): Promise<string> => {
@@ -191,9 +194,8 @@ export const changeBackground = async (
     if (backgroundImage) {
       finalPrompt = `
         Nhiệm vụ: Ghép người mẫu vào nền mới.
-        Xác định người mẫu và trang phục từ ẢNH GỐC để tách ra đó thay vào ẢNH NỀN MỚI này
+        Xác định người mẫu và trang phục từ ẢNH GỐC để tách ra sau đó thay nền phía sau bằng: ẢNH NỀN MỚI này
         + Xử lý bóng đổ và ánh sáng chân thực.
-        + Xử lí ảnh tách người mẫu ghép sang khung nền ảnh mới phải vừa vặn nhìn phù hợp với ẢNH NỀN MỚI.
         Lưu ý: Giữ nguyên khuôn mặt của người mẫu tuyệt đối không thay đổi khuôn mặt người mẫu
       `;
       parts.push({ text: "ẢNH NỀN MỚI:" });
@@ -246,11 +248,18 @@ export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoP
       5. Playful (Vui vẻ, nghiêng 1 chút mặt, năng lượng tích cực).
 
     NHIỆM VỤ 2:  Đóng vai một TikToker/Reviewer thời trang Gen Z nổi tiếng. 
-    Hãy viết 2 kịch bản voiceover ngắn (khoảng 30s) để bán sản phẩm, trang phục trong ảnh.
-    Phong cách ngôn ngữ (BẮT BUỘC):
-    - Dùng từ lóng (slang) giới trẻ, tự nhiên, thân mật. 
-    - Ví dụ từ vựng: "mấy bà", "keo lỳ", "chấn động", "tôn dáng xỉu", "hack chân", "chốt đơn", "outfit này", "tui thề".
-    - Giọng điệu hào hứng, như đang rủ bạn thân đi mua sắm.
+    Hãy viết 2 kịch bản voiceover ngắn (khoảng 35s) để bán sản phẩm, trang phục trong ảnh.
+    
+    YÊU CẦU ĐẶC BIỆT VỀ NGÔN NGỮ (RẤT QUAN TRỌNG):
+    1. TUYỆT ĐỐI KHÔNG SỬ DỤNG TIẾNG ANH (No English words allowed). 
+       Lý do: AI đọc giọng Việt sẽ bị lỗi khi gặp từ tiếng Anh.
+    2. Phải thay thế các từ tiếng Anh bằng từ lóng tiếng Việt tương đương nhưng vẫn giữ chất Gen Z:
+       - Thay "Outfit" -> "bộ cánh này", "set đồ này", "em này".
+       - Thay "Slay" -> "đỉnh của chóp", "u là trời", "keo lỳ", "đỉnh nóc kịch trần".
+       - Thay "Check" -> "soi", "ngắm nghía".
+       - Thay "Mix match" -> "lên đồ", "phối đồ".
+       - Thay "Sale" -> "săn deal", "giá hời".
+    3. Giọng điệu hào hứng, tự nhiên: "mấy bà ơi", "chấn động", "tôn dáng xỉu", "hack chân cực đỉnh", "chốt đơn lẹ", "mê chữ ê kéo dài", "nhức nách", "hết nước chấm".
 
     ĐỊNH DẠNG ĐẦU RA (JSON BẮT BUỘC):
     {
@@ -291,5 +300,38 @@ export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoP
   } catch (error: any) {
     console.error("Video Content Generation Error:", error);
     return { videoPrompts: [`Lỗi: ${error.message}`], voiceoverScripts: [] };
+  }
+};
+
+// NEW: Generate Audio (TTS)
+export const generateSpeech = async (text: string, voiceName: string): Promise<string> => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    const response = await ai.models.generateContent({
+      model: TTS_MODEL_NAME,
+      contents: [{ parts: [{ text: text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: voiceName },
+            },
+        },
+      },
+    });
+
+    const base64Pcm = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    
+    if (!base64Pcm) {
+      throw new Error("AI did not return audio data.");
+    }
+
+    // Wrap raw PCM in a WAV header so it can be played/downloaded
+    return addWavHeader(base64Pcm);
+
+  } catch (error: any) {
+    console.error("TTS Error:", error);
+    throw new Error(error.message || "Lỗi tạo giọng nói.");
   }
 };
