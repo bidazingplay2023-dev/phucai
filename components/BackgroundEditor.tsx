@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { ProcessedImage, BackgroundState, GeneratedBackground } from '../types';
-import { suggestBackgrounds, changeBackground, generateVideoPrompt, generateSpeech } from '../services/geminiService';
+import { ProcessedImage, BackgroundState, GeneratedBackground, ApiKeys } from '../types';
+import { suggestBackgrounds, changeBackground, generateVideoPrompt } from '../services/geminiService';
+import { generateSpeechEverAI } from '../services/everAiService';
 import { ImageUploader } from './ImageUploader';
 import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Trash2, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play } from 'lucide-react';
 
 interface BackgroundEditorProps {
   initialBaseImage: string | null;
-  apiKey: string; // Added apiKey prop
+  apiKeys: ApiKeys; // Updated prop to accept both keys
 }
 
-export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseImage, apiKey }) => {
+export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseImage, apiKeys }) => {
   const [state, setState] = useState<BackgroundState>({
     selectedBaseImage: initialBaseImage,
     backgroundImage: null,
@@ -28,9 +29,12 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   // Accordion state: 'video' | 'voiceover' | null
   const [openSection, setOpenSection] = useState<string | null>('video');
 
-  // TTS State
-  const [selectedVoice, setSelectedVoice] = useState('Kore');
-  const VOICES = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
+  // TTS State - EverAI
+  const [selectedVoice, setSelectedVoice] = useState('voice-e7bc94bb-b424-4a0a');
+  const VOICES = [
+    { name: 'Nữ - Truyền cảm (Default)', code: 'voice-e7bc94bb-b424-4a0a' },
+    // Add more if you have codes
+  ];
 
   // Sync prop to state if it changes
   useEffect(() => {
@@ -56,7 +60,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     if (!state.selectedBaseImage) return;
     setState(prev => ({ ...prev, isSuggesting: true, error: null }));
     try {
-      const suggestions = await suggestBackgrounds(apiKey, state.selectedBaseImage); // Pass apiKey
+      const suggestions = await suggestBackgrounds(apiKeys.gemini, state.selectedBaseImage);
       setState(prev => ({ ...prev, isSuggesting: false, aiSuggestions: suggestions }));
     } catch (err) {
       setState(prev => ({ ...prev, isSuggesting: false, error: "Không lấy được gợi ý." }));
@@ -83,18 +87,15 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     try {
       let resultBase64 = '';
 
-      // LOGIC BRANCH: If KEEP, use original image. Else, call AI to change background.
       if (mode === 'KEEP') {
          resultBase64 = state.selectedBaseImage;
-         // Small delay to simulate processing so user sees the loading state momentarily
          await new Promise(resolve => setTimeout(resolve, 800));
       } else {
          const bgImageParam = mode === 'UPLOAD' ? state.backgroundImage : null;
          const promptParam = mode === 'PROMPT' ? state.textPrompt : '';
-         resultBase64 = await changeBackground(apiKey, state.selectedBaseImage, promptParam, bgImageParam); // Pass apiKey
+         resultBase64 = await changeBackground(apiKeys.gemini, state.selectedBaseImage, promptParam, bgImageParam);
       }
       
-      // Create a new result object with loading state for prompts
       const newResultItem: GeneratedBackground = {
           base64: resultBase64,
           videoPrompts: [],
@@ -104,7 +105,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
           isAudioLoading: {}
       };
 
-      // 1. Update UI with the image immediately
       setState(prev => {
           const updatedResults = isRegenerate ? [newResultItem, ...prev.results] : [newResultItem];
           return { 
@@ -114,14 +114,11 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
           };
       });
 
-      // 2. Automatically generate prompt for THIS specific image
       try {
-        const contentResult = await generateVideoPrompt(apiKey, resultBase64); // Pass apiKey
+        const contentResult = await generateVideoPrompt(apiKeys.gemini, resultBase64);
         
-        // Update the specific item in the results array
         setState(prev => {
             const updatedResults = prev.results.map(item => {
-                // Find the item by matching base64
                 if (item === newResultItem) {
                     return { 
                       ...item, 
@@ -153,7 +150,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   };
 
   const handleGenerateAudio = async (scriptIndex: number, text: string) => {
-    // Set Loading State for this script
     setState(prev => {
       const updatedResults = [...prev.results];
       const current = updatedResults[selectedIndex];
@@ -164,9 +160,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     });
 
     try {
-      const audioBase64 = await generateSpeech(apiKey, text, selectedVoice); // Pass apiKey
+      // Use EverAI Service here
+      const audioBase64 = await generateSpeechEverAI(apiKeys.everAi, text, selectedVoice);
 
-      // Update Audio Data
       setState(prev => {
         const updatedResults = [...prev.results];
         const current = updatedResults[selectedIndex];
@@ -178,8 +174,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       });
     } catch (error) {
        console.error("Audio Gen Error", error);
-       alert("Lỗi khi tạo audio: " + error);
-       // Reset loading
+       alert("Lỗi khi tạo audio (EverAI): " + error);
        setState(prev => {
         const updatedResults = [...prev.results];
         const current = updatedResults[selectedIndex];
@@ -204,8 +199,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
   const handleDownloadAudio = (base64Audio: string) => {
     const link = document.createElement('a');
-    link.href = `data:audio/wav;base64,${base64Audio}`;
-    link.download = `voiceover-${selectedVoice}-${Date.now()}.wav`;
+    // EverAI likely returns MP3/WAV, we base64 encoded it.
+    link.href = `data:audio/mp3;base64,${base64Audio}`;
+    link.download = `voiceover-${Date.now()}.mp3`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -238,13 +234,11 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       "Playful"
   ];
 
-  // Get current selected item safely
   const currentItem = state.results[selectedIndex];
 
   return (
     <div className="animate-in slide-in-from-right duration-500 pb-10">
       
-      {/* CASE 1: NO BASE IMAGE SELECTED */}
       {!state.selectedBaseImage ? (
           <div className="flex flex-col items-center justify-center min-h-[300px] bg-white rounded-2xl border-2 border-dashed border-indigo-200 p-8 text-center space-y-4">
               <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center">
@@ -267,12 +261,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
               </div>
           </div>
       ) : (
-        /* CASE 2: HAS BASE IMAGE - SHOW EDITOR */
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Left Column: Inputs */}
             <div className="space-y-6">
             
-            {/* Base Image Preview with Change Option */}
             <div className="relative group flex gap-4 items-start bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
                 <img 
                 src={`data:image/png;base64,${state.selectedBaseImage}`} 
@@ -292,7 +283,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
             <div className="border-t border-gray-200 my-2"></div>
 
-            {/* Mode Selection Tabs */}
             <div className="flex p-1 bg-gray-100 rounded-xl">
                 <button
                 onClick={() => setMode('UPLOAD')}
@@ -329,7 +319,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                 </button>
             </div>
 
-            {/* Option A: Custom Background Image */}
             {mode === 'UPLOAD' && (
                 <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-800 mb-2">
@@ -345,7 +334,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                 </div>
             )}
 
-            {/* Option B: Text Prompt & Suggestions */}
             {mode === 'PROMPT' && (
                 <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-800 mb-2">
@@ -386,7 +374,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                 </div>
             )}
 
-             {/* Option C: Keep Original (New) */}
              {mode === 'KEEP' && (
                 <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-indigo-100 rounded-lg p-4 text-sm text-indigo-800 mb-2 flex gap-3">
@@ -437,12 +424,10 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
             </button>
             </div>
 
-            {/* Right Column: Result */}
             <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200 flex flex-col min-h-[500px]">
             {state.results.length > 0 && currentItem ? (
                 <div className="w-full flex flex-col gap-4 animate-in zoom-in-95 duration-300 h-full">
                 
-                {/* Main Image View */}
                 <div className="relative w-full aspect-[9/16] rounded-xl overflow-hidden shadow-lg bg-gray-900 group">
                     <img 
                         src={`data:image/png;base64,${currentItem.base64}`} 
@@ -451,7 +436,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                     />
                 </div>
 
-                {/* Thumbnails */}
                 {state.results.length > 1 && (
                     <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                         {state.results.map((res, idx) => (
@@ -477,7 +461,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                     </div>
                 )}
 
-                {/* Content Generation Result - ACCORDION STYLE */}
                 <div className="bg-white rounded-xl border border-indigo-100 shadow-sm overflow-hidden animate-in slide-in-from-bottom-4 transition-all">
                     
                     {currentItem.isVideoPromptLoading ? (
@@ -487,7 +470,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                         </div>
                     ) : (
                         <div className="divide-y divide-gray-100">
-                             {/* Accordion 1: Video Prompts */}
                              <div>
                                 <button 
                                     onClick={() => setOpenSection(openSection === 'video' ? null : 'video')}
@@ -539,7 +521,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 )}
                              </div>
 
-                             {/* Accordion 2: Voiceover Scripts & Audio Gen */}
                              <div>
                                 <button 
                                     onClick={() => setOpenSection(openSection === 'voiceover' ? null : 'voiceover')}
@@ -549,7 +530,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                         <div className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-1 rounded-md">
                                             <Mic size={14} />
                                         </div>
-                                        Lời thoại & Thu âm (TTS)
+                                        Lời thoại & Thu âm (EverAI)
                                     </div>
                                     {openSection === 'voiceover' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                 </button>
@@ -557,15 +538,14 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 {openSection === 'voiceover' && (
                                     <div className="p-3 bg-gray-50/50 space-y-4 animate-in slide-in-from-top-2 duration-200">
                                         
-                                        {/* Voice Selector */}
                                         <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-gray-200 shadow-sm">
-                                            <label className="text-xs font-semibold text-gray-600 ml-1">Chọn giọng đọc AI:</label>
+                                            <label className="text-xs font-semibold text-gray-600 ml-1">Giọng EverAI:</label>
                                             <select 
                                                 value={selectedVoice} 
                                                 onChange={(e) => setSelectedVoice(e.target.value)}
-                                                className="text-xs border-none bg-indigo-50 text-indigo-700 font-bold rounded px-2 py-1 focus:ring-0 cursor-pointer hover:bg-indigo-100 transition-colors"
+                                                className="text-xs border-none bg-indigo-50 text-indigo-700 font-bold rounded px-2 py-1 focus:ring-0 cursor-pointer hover:bg-indigo-100 transition-colors max-w-[200px]"
                                             >
-                                                {VOICES.map(v => <option key={v} value={v}>{v}</option>)}
+                                                {VOICES.map(v => <option key={v.code} value={v.code}>{v.name}</option>)}
                                             </select>
                                         </div>
 
@@ -578,7 +558,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
                                                 return (
                                                 <div key={idx} className="flex flex-col p-3 bg-white border border-gray-200 rounded-lg shadow-sm gap-3 group hover:border-indigo-200 transition-all">
-                                                    {/* Header: Option label + Copy */}
                                                     <div className="flex justify-between items-center gap-2">
                                                         <span className="text-[10px] font-bold uppercase tracking-wider text-white bg-indigo-400 px-2 py-0.5 rounded-md">
                                                             Kịch bản {idx + 1}
@@ -596,12 +575,10 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                                         </button>
                                                     </div>
                                                     
-                                                    {/* Script Content */}
                                                     <div className="text-xs text-gray-700 leading-relaxed italic select-all cursor-text bg-gray-50 p-2 rounded border border-gray-100">
                                                         "{script}"
                                                     </div>
 
-                                                    {/* Audio Controls */}
                                                     <div className="pt-2 border-t border-gray-100 flex items-center gap-2">
                                                         {!audioData ? (
                                                             <button 
@@ -618,16 +595,16 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                                                 ) : (
                                                                     <Play size={12} fill="currentColor" />
                                                                 )}
-                                                                {isAudioLoading ? 'Đang tạo audio...' : 'Tạo Audio'}
+                                                                {isAudioLoading ? 'Đang xử lý (10s+)...' : 'Tạo Audio (EverAI)'}
                                                             </button>
                                                         ) : (
                                                             <div className="flex-1 flex flex-col gap-2">
-                                                                <audio controls src={`data:audio/wav;base64,${audioData}`} className="w-full h-8" />
+                                                                <audio controls src={`data:audio/mp3;base64,${audioData}`} className="w-full h-8" />
                                                                 <button
                                                                     onClick={() => handleDownloadAudio(audioData)}
                                                                     className="flex items-center justify-center gap-1.5 w-full py-1.5 text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 rounded-md transition-colors"
                                                                 >
-                                                                    <Download size={12} /> Tải Audio ({selectedVoice})
+                                                                    <Download size={12} /> Tải Audio
                                                                 </button>
                                                             </div>
                                                         )}
@@ -644,7 +621,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                     )}
                 </div>
 
-                {/* Actions Grid */}
                 <div className="grid grid-cols-2 gap-3 mt-auto">
                     <button 
                         onClick={() => handleGenerate(true)}

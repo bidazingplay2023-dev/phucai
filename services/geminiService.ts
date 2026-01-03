@@ -9,9 +9,18 @@ const TEXT_MODEL_NAME = 'gemini-3-flash-preview';
 // Model for TTS
 const TTS_MODEL_NAME = 'gemini-2.5-flash-preview-tts';
 
+// Helper to validate API Key
+const validateApiKey = (apiKey: string) => {
+  if (!apiKey) throw new Error("API Key không tồn tại.");
+  if (/[^\x00-\x7F]/.test(apiKey)) {
+    throw new Error("API Key chứa ký tự không hợp lệ. Vui lòng đăng xuất và nhập lại Key (Tắt bộ gõ Tiếng Việt).");
+  }
+};
+
 // GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm
 export const isolateProductImage = async (apiKey: string, productImageBase64: string): Promise<string> => {
   try {
+    validateApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: apiKey });
     
     const prompt = `
@@ -49,6 +58,10 @@ export const isolateProductImage = async (apiKey: string, productImageBase64: st
     throw new Error("Không thể tách nền sản phẩm.");
   } catch (error: any) {
     console.error("Isolate Product Error:", error);
+    // Propagate the specific API key error if present
+    if (error.message && error.message.includes("API Key")) {
+        throw error;
+    }
     throw new Error(error.message || "Lỗi khi xử lý ảnh sản phẩm.");
   }
 };
@@ -61,6 +74,7 @@ export const generateTryOnImage = async (
   config: AppConfig
 ): Promise<string> => {
   try {
+    validateApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: apiKey });
 
     let promptText = `
@@ -112,6 +126,7 @@ export const generateTryOnImage = async (
     throw new Error("AI không trả về hình ảnh nào.");
   } catch (error: any) {
     console.error("Gemini Try-On Error:", error);
+    if (error.message && error.message.includes("API Key")) throw error;
     throw new Error(error.message || "Lỗi xử lý ảnh.");
   }
 };
@@ -119,6 +134,7 @@ export const generateTryOnImage = async (
 // Step 2: Suggest Backgrounds (Uses Flash text model)
 export const suggestBackgrounds = async (apiKey: string, imageBase64: string): Promise<string[]> => {
   try {
+    validateApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: apiKey });
     
     const prompt = `
@@ -178,6 +194,7 @@ export const changeBackground = async (
   backgroundImage?: ProcessedImage | null
 ): Promise<string> => {
   try {
+    validateApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: apiKey });
 
     let finalPrompt = `
@@ -227,6 +244,7 @@ export const changeBackground = async (
 
   } catch (error: any) {
     console.error("Change Background Error:", error);
+    if (error.message && error.message.includes("API Key")) throw error;
     throw new Error(error.message || "Lỗi đổi bối cảnh.");
   }
 };
@@ -234,6 +252,7 @@ export const changeBackground = async (
 // NEW: Analyze image to generate 5 Video Prompts AND 2 Voiceover Scripts
 export const generateVideoPrompt = async (apiKey: string, imageBase64: string): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
   try {
+    validateApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: apiKey });
     
     const prompt = `
@@ -302,6 +321,9 @@ export const generateVideoPrompt = async (apiKey: string, imageBase64: string): 
 
   } catch (error: any) {
     console.error("Video Content Generation Error:", error);
+    if (error.message && error.message.includes("API Key")) {
+        return { videoPrompts: [error.message], voiceoverScripts: [] };
+    }
     return { videoPrompts: [`Lỗi: ${error.message}`], voiceoverScripts: [] };
   }
 };
@@ -309,6 +331,7 @@ export const generateVideoPrompt = async (apiKey: string, imageBase64: string): 
 // NEW: Generate Audio (TTS)
 export const generateSpeech = async (apiKey: string, text: string, voiceName: string): Promise<string> => {
   try {
+    validateApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: apiKey });
     
     const response = await ai.models.generateContent({
@@ -335,6 +358,7 @@ export const generateSpeech = async (apiKey: string, text: string, voiceName: st
 
   } catch (error: any) {
     console.error("TTS Error:", error);
+    if (error.message && error.message.includes("API Key")) throw error;
     throw new Error(error.message || "Lỗi tạo giọng nói.");
   }
 };
