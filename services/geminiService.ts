@@ -1,27 +1,20 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+
+import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { AppConfig, ProcessedImage } from "../types";
 import { addWavHeader } from "./utils";
 
-// REVERT: Back to Gemini 2.5 Flash Image as requested
+// Model for Image Generation/Editing
 const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
 // Model for Text Analysis
 const TEXT_MODEL_NAME = 'gemini-3-flash-preview';
 // Model for TTS
 const TTS_MODEL_NAME = 'gemini-2.5-flash-preview-tts';
 
-// Helper to validate API Key
-const validateApiKey = (apiKey: string) => {
-  if (!apiKey) throw new Error("API Key không tồn tại.");
-  if (/[^\x00-\x7F]/.test(apiKey)) {
-    throw new Error("API Key chứa ký tự không hợp lệ. Vui lòng đăng xuất và nhập lại Key (Tắt bộ gõ Tiếng Việt).");
-  }
-};
-
 // GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm
-export const isolateProductImage = async (apiKey: string, productImageBase64: string): Promise<string> => {
+// Removed apiKey argument, using process.env.API_KEY directly
+export const isolateProductImage = async (productImageBase64: string): Promise<string> => {
   try {
-    validateApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
       Nhiệm vụ: Chụp ảnh sản phẩm thương mại điện tử (E-commerce Product Photography).
@@ -58,24 +51,19 @@ export const isolateProductImage = async (apiKey: string, productImageBase64: st
     throw new Error("Không thể tách nền sản phẩm.");
   } catch (error: any) {
     console.error("Isolate Product Error:", error);
-    // Propagate the specific API key error if present
-    if (error.message && error.message.includes("API Key")) {
-        throw error;
-    }
     throw new Error(error.message || "Lỗi khi xử lý ảnh sản phẩm.");
   }
 };
 
 // GIAI ĐOẠN 2 CỦA BƯỚC 1: Ghép vào mẫu
+// Removed apiKey argument, using process.env.API_KEY directly
 export const generateTryOnImage = async (
-  apiKey: string,
   isolatedProductBase64: string, // Input is now the clean product image
   modelImage: ProcessedImage,
   config: AppConfig
 ): Promise<string> => {
   try {
-    validateApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     let promptText = `
     Nhiệm vụ: Virtual Try-On (Thử đồ ảo).
@@ -126,27 +114,19 @@ export const generateTryOnImage = async (
     throw new Error("AI không trả về hình ảnh nào.");
   } catch (error: any) {
     console.error("Gemini Try-On Error:", error);
-    if (error.message && error.message.includes("API Key")) throw error;
     throw new Error(error.message || "Lỗi xử lý ảnh.");
   }
 };
 
 // Step 2: Suggest Backgrounds (Uses Flash text model)
-export const suggestBackgrounds = async (apiKey: string, imageBase64: string): Promise<string[]> => {
+// Removed apiKey argument, using process.env.API_KEY directly and using responseSchema
+export const suggestBackgrounds = async (imageBase64: string): Promise<string[]> => {
   try {
-    validateApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
       Bạn là một giám đốc nghệ thuật. Hãy gợi ý 3 bối cảnh (background) chụp ảnh thời trang phù hợp nhất cho bộ trang phục trong ảnh này.
-      
-      Yêu cầu đầu ra:
-      - Chỉ trả về một JSON Array chứa 3 chuỗi string.
-      - Nội dung mỗi chuỗi phải Ngắn gọn, súc tích (dưới 10 từ).
-      - KHÔNG có lời dẫn, không đánh số.
-      
-      Ví dụ output mong muốn:
-      ["Sảnh tòa nhà hiện đại", "Quán cafe phong cách Vintage", "Đường phố Tokyo về đêm"]
+      Nội dung mỗi gợi ý phải Ngắn gọn, súc tích (dưới 10 từ).
     `;
 
     const response = await ai.models.generateContent({
@@ -158,28 +138,19 @@ export const suggestBackgrounds = async (apiKey: string, imageBase64: string): P
         ]
       },
       config: {
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING }
+        }
       }
     });
 
-    const text = response.text || "";
-    
-    try {
-      // Clean potential markdown blocks if API returns ```json ... ```
-      const cleanedText = text.replace(/```json|```/g, '').trim();
-      const json = JSON.parse(cleanedText);
-      if (Array.isArray(json)) {
-        return json.map(item => String(item).trim());
-      }
-      return ["Studio phông trắng", "Đường phố hiện đại", "Quán cafe sang trọng"];
-    } catch (e) {
-      console.warn("JSON Parse Error for suggestions", e);
-      // Fallback parser if JSON fails
-      return text.split('\n')
-        .map(line => line.replace(/^\d+[\.\)]\s*|-\s*/, '').trim())
-        .filter(line => line.length > 0 && line.length < 50 && !line.includes("Dưới đây"))
-        .slice(0, 3);
+    const text = response.text;
+    if (text) {
+      return JSON.parse(text);
     }
+    return ["Studio phông trắng", "Đường phố hiện đại", "Quán cafe sang trọng"];
   } catch (error) {
     console.error("Suggestion Error:", error);
     return ["Nền màu be tối giản", "Đường phố thành thị", "Nội thất sang trọng"];
@@ -187,15 +158,14 @@ export const suggestBackgrounds = async (apiKey: string, imageBase64: string): P
 };
 
 // Step 2: Change Background
+// Removed apiKey argument, using process.env.API_KEY directly
 export const changeBackground = async (
-  apiKey: string,
   baseImageBase64: string,
   prompt: string,
   backgroundImage?: ProcessedImage | null
 ): Promise<string> => {
   try {
-    validateApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     let finalPrompt = `
       Nhiệm vụ: Thay đổi bối cảnh (background).
@@ -244,50 +214,29 @@ export const changeBackground = async (
 
   } catch (error: any) {
     console.error("Change Background Error:", error);
-    if (error.message && error.message.includes("API Key")) throw error;
     throw new Error(error.message || "Lỗi đổi bối cảnh.");
   }
 };
 
 // NEW: Analyze image to generate 5 Video Prompts AND 2 Voiceover Scripts
-export const generateVideoPrompt = async (apiKey: string, imageBase64: string): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
+// Removed apiKey argument, using process.env.API_KEY directly and using responseSchema
+export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
   try {
-    validateApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
     Phân tích bức ảnh này và thực hiện 2 nhiệm vụ:
 
     NHIỆM VỤ 1: Viết 5 Video Prompts (Mô tả hành động Image-to-Video)
     - Tạo 5 prompt tiếng Anh ngắn gọn dùng cho các AI Video Generator.
-    - Phong cách: Gen Z, Trẻ trung, Năng động, "Slay".
     - ƯU TIÊN TUYỆT ĐỐI: Mô tả các hành động quay video bằng điện thoại trước gương (Mirror Selfie) hoặc khoe Outfit (Outfit Check).
-    - 5 tuỳ chọn cụ thể cần viết:
-      1. Mirror Selfie (Mô tả người mẫu cầm điện thoại quay trước gương, lắc nhẹ người, nghiêng đầu dễ thương).
-      2. Outfit Check (Mô tả camera zoom nhẹ vào chi tiết quần áo, người mẫu vuốt tóc hoặc chỉnh áo).
-      3. Gen Z Pose (Tạo dáng ngầu, che mặt một chút hoặc nháy mắt, chuyển động tự nhiên).
-      4. Tóc Hông (Xoay ngang hông vuốt tóc nhẹ nhàng).
-      5. Playful (Vui vẻ, nghiêng 1 chút mặt, năng lượng tích cực).
 
-    NHIỆM VỤ 2:  Đóng vai một TikToker/Reviewer thời trang Gen Z nổi tiếng. 
+    NHIỆM VỤ 2: Đóng vai một TikToker/Reviewer thời trang Gen Z nổi tiếng. 
     Hãy viết 2 kịch bản voiceover ngắn (khoảng 35s) để bán sản phẩm, trang phục trong ảnh.
     
     YÊU CẦU ĐẶC BIỆT VỀ NGÔN NGỮ (RẤT QUAN TRỌNG):
-    1. TUYỆT ĐỐI KHÔNG SỬ DỤNG TIẾNG ANH (No English words allowed). 
-       Lý do: AI đọc giọng Việt sẽ bị lỗi khi gặp từ tiếng Anh.
-    2. Phải thay thế các từ tiếng Anh bằng từ lóng tiếng Việt tương đương nhưng vẫn giữ chất Gen Z:
-       - Thay "Outfit" -> "bộ cánh này", "set đồ này", "em này".
-       - Thay "Slay" -> "đỉnh của chóp", "u là trời", "keo lỳ", "đỉnh nóc kịch trần".
-       - Thay "Check" -> "soi", "ngắm nghía".
-       - Thay "Mix match" -> "lên đồ", "phối đồ".
-       - Thay "Sale" -> "săn deal", "giá hời".
-    3. Giọng điệu hào hứng, tự nhiên: "mấy bà ơi", "chấn động", "tôn dáng xỉu", "hack chân cực đỉnh", "chốt đơn lẹ", "mê chữ ê kéo dài", "nhức nách", "hết nước chấm".
-
-    ĐỊNH DẠNG ĐẦU RA (JSON BẮT BUỘC):
-    {
-      "videoPrompts": ["Prompt 1...", "Prompt 2...", "Prompt 3...", "Prompt 4...", "Prompt 5..."],
-      "voiceoverScripts": ["Lời thoại 1...", "Lời thoại 2..."]
-    }
+    1. TUYỆT ĐỐI KHÔNG SỬ DỤNG TIẾNG ANH (No English words allowed).
+    2. Giọng điệu hào hứng, tự nhiên, sử dụng từ lóng Gen Z Việt Nam.
     `;
 
     const response = await ai.models.generateContent({
@@ -299,40 +248,40 @@ export const generateVideoPrompt = async (apiKey: string, imageBase64: string): 
         ]
       },
       config: {
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            videoPrompts: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            },
+            voiceoverScripts: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            }
+          },
+          required: ["videoPrompts", "voiceoverScripts"]
+        }
       }
     });
 
     const text = response.text;
-    if (!text) return { videoPrompts: ["Failed to generate."], voiceoverScripts: [] };
-
-    try {
-      const cleanedText = text.replace(/```json|```/g, '').trim();
-      const json = JSON.parse(cleanedText);
-      
-      const videoPrompts = Array.isArray(json.videoPrompts) ? json.videoPrompts.map((s: any) => String(s)) : [];
-      const voiceoverScripts = Array.isArray(json.voiceoverScripts) ? json.voiceoverScripts.map((s: any) => String(s)) : [];
-
-      return { videoPrompts, voiceoverScripts };
-    } catch (e) {
-      console.warn("Failed to parse JSON prompt response", e);
-      return { videoPrompts: ["Error parsing response"], voiceoverScripts: [] };
+    if (text) {
+      return JSON.parse(text);
     }
-
+    return { videoPrompts: ["Failed to generate."], voiceoverScripts: [] };
   } catch (error: any) {
     console.error("Video Content Generation Error:", error);
-    if (error.message && error.message.includes("API Key")) {
-        return { videoPrompts: [error.message], voiceoverScripts: [] };
-    }
     return { videoPrompts: [`Lỗi: ${error.message}`], voiceoverScripts: [] };
   }
 };
 
 // NEW: Generate Audio (TTS)
-export const generateSpeech = async (apiKey: string, text: string, voiceName: string): Promise<string> => {
+// Removed apiKey argument, using process.env.API_KEY directly
+export const generateSpeech = async (text: string, voiceName: string): Promise<string> => {
   try {
-    validateApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const response = await ai.models.generateContent({
       model: TTS_MODEL_NAME,
@@ -358,7 +307,6 @@ export const generateSpeech = async (apiKey: string, text: string, voiceName: st
 
   } catch (error: any) {
     console.error("TTS Error:", error);
-    if (error.message && error.message.includes("API Key")) throw error;
     throw new Error(error.message || "Lỗi tạo giọng nói.");
   }
 };

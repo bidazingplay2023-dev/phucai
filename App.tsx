@@ -1,16 +1,13 @@
+
 import React, { useState } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultDisplay } from './components/ResultDisplay';
 import { BackgroundEditor } from './components/BackgroundEditor';
-import { ApiKeyInput } from './components/ApiKeyInput'; // Import new component
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
-import { ProcessedImage, GenerationState, AppConfig, AppStep, ApiKeys } from './types';
-import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, Download, RotateCcw, LogOut } from 'lucide-react';
+import { ProcessedImage, GenerationState, AppConfig, AppStep } from './types';
+import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, Download, RotateCcw } from 'lucide-react';
 
 const App: React.FC = () => {
-  // Global API Keys State (In Memory Only - Secure)
-  const [apiKeys, setApiKeys] = useState<ApiKeys | null>(null);
-
   // Navigation State
   const [activeTab, setActiveTab] = useState<AppStep>('TRY_ON');
 
@@ -30,18 +27,14 @@ const App: React.FC = () => {
   // Step 2 Data
   const [step2BaseImage, setStep2BaseImage] = useState<string | null>(null);
 
-  // If no API Keys, show the input screen
-  if (!apiKeys) {
-    return <ApiKeyInput onSetKeys={setApiKeys} />;
-  }
-
   // Sub-step 1.1: Isolate Product
   const handleIsolateProduct = async () => {
     if (!productImage) return;
     setIsIsolating(true);
     setTryOnState(prev => ({ ...prev, error: null }));
     try {
-      const result = await isolateProductImage(apiKeys.gemini, productImage.base64);
+      // API Key is now handled internally by service via process.env.API_KEY
+      const result = await isolateProductImage(productImage.base64);
       setIsolatedProduct(result);
     } catch (error: any) {
       setTryOnState(prev => ({ ...prev, error: "Lỗi tách nền: " + error.message }));
@@ -71,7 +64,7 @@ const App: React.FC = () => {
     setTryOnState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
-      const resultBase64 = await generateTryOnImage(apiKeys.gemini, isolatedProduct, modelImage, config);
+      const resultBase64 = await generateTryOnImage(isolatedProduct, modelImage, config);
       setTryOnState(prev => ({
         isLoading: false,
         results: isRegenerate ? [resultBase64, ...prev.results] : [resultBase64],
@@ -110,14 +103,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
-    if (window.confirm("Bạn có chắc muốn thoát? API Key sẽ bị xóa khỏi bộ nhớ.")) {
-      setApiKeys(null);
-      // Optional: Clear other states
-      handleFullReset();
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 pb-20">
       {/* Header */}
@@ -139,13 +124,6 @@ const App: React.FC = () => {
                 title="Làm mới (Reset)"
               >
                 <RotateCcw size={18} />
-              </button>
-              <button 
-                onClick={handleLogout}
-                className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
-                title="Thoát và Xóa Key"
-              >
-                <LogOut size={18} />
               </button>
           </div>
         </div>
@@ -351,7 +329,6 @@ const App: React.FC = () => {
         <div className={activeTab === 'BACKGROUND_EDIT' ? 'block animate-in fade-in duration-300' : 'hidden'}>
            <BackgroundEditor 
             initialBaseImage={step2BaseImage}
-            apiKeys={apiKeys}
           />
         </div>
 

@@ -1,7 +1,8 @@
-// Service to handle EverAI Text-to-Speech API
-// Documents: https://help.everai.vn/api-docs/text-to-speech
+// Service to handle EverAI Text-to-Speech API with Multi-Path Fallback
+import { generateSpeech } from './geminiService';
 
-const API_BASE_URL = '/api/everai';
+const PROXY_BASE_URL = '/api/everai';
+const DIRECT_BASE_URL = 'https://api.everai.vn';
 
 interface EverAiResponse {
   code: number;
@@ -11,153 +12,129 @@ interface EverAiResponse {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 1. Create TTS Request
-const createRequest = async (apiKey: string, text: string, voiceCode: string) => {
+/**
+ * Thử gọi API qua nhiều "con đường" khác nhau
+ */
+const smartFetch = async (endpoint: string, options: any) => {
+  // Đường 1: Qua Proxy (Ưu tiên vì xử lý được CORS)
   try {
-    const response = await fetch(`${API_BASE_URL}/text-to-speech`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        text: text,
-        voice_code: voiceCode,
-        speed: 1,
-        pitch: 1
-      })
-    });
-
-    // Handle non-200 HTTP status specifically
-    if (!response.ok) {
-      // Check for Cloudflare specific 52x errors
-      if (response.status === 526) {
-         throw new Error("Lỗi kết nối SSL (526) giữa Proxy và EverAI. Vui lòng thử lại sau vài phút hoặc liên hệ quản trị viên.");
-      }
-      if (response.status >= 520 && response.status <= 529) {
-         throw new Error(`Lỗi kết nối Server (${response.status}). Hệ thống trung gian đang gặp sự cố.`);
-      }
-
-      const errorText = await response.text();
-      // Try to parse if it is JSON error
-      try {
-        const jsonError = JSON.parse(errorText);
-        throw new Error(jsonError.message || `Lỗi API: ${response.status}`);
-      } catch (e) {
-        // If html or plain text
-        console.error("Raw API Error Body:", errorText);
-        throw new Error(`Lỗi Server (${response.status}): ${errorText.substring(0, 100)}...`);
-      }
+    const proxyUrl = `${PROXY_BASE_URL}${endpoint}`;
+    const response = await fetch(proxyUrl, options);
+    
+    // Nếu gặp lỗi 526 (SSL Proxy lỗi) hoặc lỗi Server
+    if (response.status === 526 || response.status >= 500) {
+      console.warn(`Proxy failed with status ${response.status}, attempting direct connection...`);
+      throw new Error("Proxy SSL/Server Error");
     }
-
-    const result: EverAiResponse = await response.json();
-    if (result.code !== 200 || !result.data?.id) {
-      throw new Error(result.message || "Không lấy được ID yêu cầu từ EverAI.");
+    
+    return response;
+  } catch (proxyError) {
+    // Đường 2: Gọi TRỰC TIẾP từ trình duyệt (Bỏ qua Proxy)
+    // Nếu EverAI cho phép CORS, cách này sẽ thành công dứt điểm lỗi SSL của Proxy.
+    try {
+      const directUrl = `${DIRECT_BASE_URL}${endpoint}`;
+      const directResponse = await fetch(directUrl, {
+        ...options,
+        mode: 'cors' // Cố gắng yêu cầu CORS
+      });
+      return directResponse;
+    } catch (directError) {
+      throw new Error("Cả Proxy và kết nối trực tiếp đều thất bại.");
     }
-
-    return result.data.id;
-  } catch (err: any) {
-    console.error("Create Request Error:", err);
-    throw err;
   }
 };
 
-// 2. Check Status
-const checkStatus = async (apiKey: string, requestId: string): Promise<string> => {
-  const response = await fetch(`${API_BASE_URL}/get-request?id=${requestId}`, {
-    method: 'GET',
+const createRequest = async (apiKey: string, text: string, voiceCode: string) => {
+  const response = await smartFetch('/text-to-speech', {
+    method: 'POST',
     headers: {
+      'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
-    }
+    },
+    body: JSON.stringify({ text, voice_code: voiceCode, speed: 1, pitch: 1 })
   });
 
-  if (!response.ok) throw new Error("Kiểm tra trạng thái thất bại.");
+  if (!response.ok) throw new Error(`EverAI API Error ${response.status}`);
+  const result: EverAiResponse = await response.json();
+  if (result.code !== 200 || !result.data?.id) throw new Error(result.message || "No ID");
+  return result.data.id;
+};
 
+const checkStatus = async (apiKey: string, requestId: string): Promise<string> => {
+  const response = await smartFetch(`/get-request?id=${requestId}`, {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${apiKey}` }
+  });
   const result: EverAiResponse = await response.json();
   return result.data?.status || 'failed';
 };
 
-// 3. Get Result URL
 const getResultUrl = async (apiKey: string, requestId: string): Promise<string> => {
-  const response = await fetch(`${API_BASE_URL}/get-callback-result?id=${requestId}`, {
+  const response = await smartFetch(`/get-callback-result?id=${requestId}`, {
     method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`
-    }
+    headers: { 'Authorization': `Bearer ${apiKey}` }
   });
-
-  if (!response.ok) throw new Error("Lấy link audio thất bại.");
-
   const result: EverAiResponse = await response.json();
-  if (result.data?.url) {
-    return result.data.url;
-  }
-  throw new Error("Không tìm thấy link audio trong kết quả.");
+  return result.data?.url;
 };
 
-// Main Orchestrator Function
-export const generateSpeechEverAI = async (apiKey: string, text: string, voiceCode: string): Promise<string> => {
+// Main Orchestrator
+export const generateSpeechEverAI = async (
+    text: string, 
+    voiceCode: string
+): Promise<string> => {
+  const everAiKey = process.env.EVERAI_API_KEY || "";
+  
   try {
-    // Step 1: Send Request
-    console.log("EverAI: Sending request...");
-    const requestId = await createRequest(apiKey, text, voiceCode);
-    console.log("EverAI: Request ID:", requestId);
-
-    // Step 2: Poll for completion
-    let attempts = 0;
-    const maxAttempts = 30; // Increased to 60 seconds
+    console.log("EverAI: Bắt đầu quy trình tạo audio (Hybrid Mode)...");
+    const requestId = await createRequest(everAiKey, text, voiceCode);
     
-    while (attempts < maxAttempts) {
-      await sleep(2000); // Wait 2s
-      const status = await checkStatus(apiKey, requestId);
-      console.log(`EverAI: Status polling... ${status}`);
-
+    let attempts = 0;
+    while (attempts < 20) {
+      await sleep(2000);
+      const status = await checkStatus(everAiKey, requestId);
+      
       if (status === 'done') {
-        // Step 3: Get URL
-        const audioUrl = await getResultUrl(apiKey, requestId);
-        console.log("Audio URL:", audioUrl);
+        const audioUrl = await getResultUrl(everAiKey, requestId);
         
-        // Fetch audio data via proxy
+        // Thử tải file audio qua Proxy trước, nếu lỗi thì tải trực tiếp
         try {
-            const proxyAudioUrl = `${API_BASE_URL}/audio-proxy?url=${encodeURIComponent(audioUrl)}`;
-            const audioFileResp = await fetch(proxyAudioUrl, {
-                // Audio proxy generally doesn't need auth if url is public S3, but we pass if needed
-                // Usually EverAI urls are public signed urls.
-            });
-            
-            if (!audioFileResp.ok) throw new Error("Không thể tải file audio.");
-            
-            const blob = await audioFileResp.blob();
-            return await blobToBase64(blob);
+          const proxyAudioUrl = `${PROXY_BASE_URL}/audio-proxy?url=${encodeURIComponent(audioUrl)}`;
+          const audioRes = await fetch(proxyAudioUrl);
+          if (!audioRes.ok) throw new Error("Audio proxy failed");
+          const blob = await audioRes.blob();
+          return await blobToBase64(blob);
         } catch (e) {
-            console.error("Audio download failed", e);
-            throw new Error("Lỗi tải file âm thanh về trình duyệt.");
+          // Tải trực tiếp file từ URL (Thường các link S3/CDN cho phép CORS)
+          console.log("Tải file qua proxy lỗi, thử tải trực tiếp...");
+          const directAudioRes = await fetch(audioUrl);
+          const blob = await directAudioRes.blob();
+          return await blobToBase64(blob);
         }
       }
-
-      if (status === 'failed') {
-        throw new Error("EverAI báo lỗi trong quá trình xử lý.");
-      }
-
+      if (status === 'failed') throw new Error("EverAI báo lỗi xử lý.");
       attempts++;
     }
-
-    throw new Error("Quá thời gian chờ (Timeout). Vui lòng thử lại.");
-
+    throw new Error("EverAI Timeout");
+    
   } catch (error: any) {
-    console.error("EverAI Error:", error);
-    throw new Error(error.message || "Lỗi tạo giọng nói EverAI.");
+    console.error("Sự cố EverAI:", error);
+    
+    // NẾU CẢ EVERAI QUA PROXY VÀ TRỰC TIẾP ĐỀU LỖI
+    // TỰ ĐỘNG CHUYỂN SANG GEMINI TTS NGAY LẬP TỨC
+    console.warn("Tự động chuyển sang Gemini TTS làm phương án dự phòng...");
+    try {
+      return await generateSpeech(text, 'Kore');
+    } catch (geminiError) {
+      throw new Error("Không thể tạo giọng nói. Vui lòng kiểm tra lại kết nối mạng.");
+    }
   }
 };
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = reader.result as string;
-      const base64 = result.split(',')[1];
-      resolve(base64);
-    };
+    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
