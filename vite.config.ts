@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
         proxy: {
           '/api/everai': {
-            target: 'https://api.everai.vn',
+            target: 'https://www.everai.vn/api',
             changeOrigin: true,
             secure: false,
             rewrite: (path) => path.replace(/^\/api\/everai/, '')

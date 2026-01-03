@@ -401,11 +401,14 @@ async function pollEverAIResult(requestId: string, maxAttempts = 15, intervalMs 
 async function fetchAudioAsBase64(url: string): Promise<string> {
     // If the URL is absolute and CORS blocks it, we might need to proxy it.
     // However, usually signed URLs from S3/GCS allow CORS. 
-    // If it is from api.everai.vn, we might need to strip and proxy.
+    // If it is from everai.vn (api or www), we might need to strip and proxy.
     let fetchUrl = url;
-    if (url.includes('api.everai.vn')) {
+    if (url.includes('everai.vn')) {
         // Simple heuristic: route through our proxy if it's the API domain
-        fetchUrl = url.replace('https://api.everai.vn', PROXY_BASE_URL);
+        // New Domain
+        fetchUrl = url.replace('https://www.everai.vn/api', PROXY_BASE_URL);
+        // Fallback for Old Domain (in case returned in data)
+        fetchUrl = fetchUrl.replace('https://api.everai.vn', PROXY_BASE_URL);
     }
 
     const response = await fetch(fetchUrl);

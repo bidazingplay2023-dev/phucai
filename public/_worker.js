@@ -17,7 +17,8 @@ export default {
       }
 
       const targetPath = url.pathname.replace('/api/everai', '');
-      const targetUrl = `https://api.everai.vn${targetPath}${url.search}`;
+      // Update target URL to www.everai.vn/api based on official docs
+      const targetUrl = `https://www.everai.vn/api${targetPath}${url.search}`;
       
       // Create new headers, EXCLUDING 'Host' to avoid SNI mismatch (Error 526/403)
       const newHeaders = new Headers();
