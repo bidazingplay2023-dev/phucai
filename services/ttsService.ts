@@ -1,7 +1,7 @@
 // API Configuration for EverAI
 const API_KEY = "3D6WxRll1VWKGZWj0DF9kgjG8O3wRCzie";
 // CHANGED: New Voice ID
-const VOICE_ID = "voice-d88c55c5-1d0a-4ec0";
+const VOICE_ID = "voice-49df0c0d-ec91-43ed";
 
 const ENDPOINTS = {
   PROXY_TTS: "/api/everai/tts", 
