@@ -4,19 +4,15 @@ import { addWavHeader } from "./utils";
 
 // REVERT: Back to Gemini 2.5 Flash Image as requested
 const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
-// Model for Text Analysis
+// Model for Text Analysis - Updated to avoid 404 on deprecated/invalid model names
 const TEXT_MODEL_NAME = 'gemini-3-flash-preview';
-
-// --- EVERAI CREDENTIALS ---
-// Note: We use a relative path for the API URL to allow the Proxy (Vite or Cloudflare) to handle CORS.
-const PROXY_BASE_URL = "/api/everai"; 
-const EVERAI_API_KEY = "R28Id4IVC3YNbq1mERu2iNqw9hvI6geUl";
-const EVERAI_VOICE_CODE = "voice-e7bc94bb-b424-4a0a";
+// Model for TTS
+const TTS_MODEL_NAME = 'gemini-2.5-flash-preview-tts';
 
 // GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm
-export const isolateProductImage = async (apiKey: string, productImageBase64: string): Promise<string> => {
+export const isolateProductImage = async (productImageBase64: string): Promise<string> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
       Nhiệm vụ: Chụp ảnh sản phẩm thương mại điện tử (E-commerce Product Photography).
@@ -38,7 +34,7 @@ export const isolateProductImage = async (apiKey: string, productImageBase64: st
         ]
       },
       config: {
-        imageConfig: { aspectRatio: "1:1" }, 
+        imageConfig: { aspectRatio: "1:1" }, // Square aspect ratio for product shot
       }
     });
 
@@ -59,13 +55,12 @@ export const isolateProductImage = async (apiKey: string, productImageBase64: st
 
 // GIAI ĐOẠN 2 CỦA BƯỚC 1: Ghép vào mẫu
 export const generateTryOnImage = async (
-  apiKey: string,
-  isolatedProductBase64: string, 
+  isolatedProductBase64: string, // Input is now the clean product image
   modelImage: ProcessedImage,
   config: AppConfig
 ): Promise<string> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     let promptText = `
     Nhiệm vụ: Virtual Try-On (Thử đồ ảo).
@@ -121,20 +116,20 @@ export const generateTryOnImage = async (
 };
 
 // Step 2: Suggest Backgrounds (Uses Flash text model)
-export const suggestBackgrounds = async (apiKey: string, imageBase64: string): Promise<string[]> => {
+export const suggestBackgrounds = async (imageBase64: string): Promise<string[]> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
-      Bạn là một giám đốc nghệ thuật. Hãy gợi ý 3 bối cảnh (background) chụp ảnh thời trang phù hợp nhất cho bộ trang phục trong ảnh này.
-      
+      "Bạn là Giám đốc Hình ảnh cho một thương hiệu thời trang thiết kế trẻ trung (local brand). Hãy lên ý tưởng cho 3 bối cảnh chụp ảnh lookbook tại nhà (home-studio vibe).
+      Bối cảnh chung (The Vibe): Một căn hộ chung cư cao tầng hiện đại (Modern City Apartment) với phong cách Soft Industrial & Korean Minimalist. Không gian phải sáng sủa, gọn gàng, có gu nhưng gần gũi, không quá xa hoa hào nhoáng.
+      + Vẫn giữ các yếu tố đặc trưng: Tường bê tông sáng màu hoặc trát vữa (plaster), sàn gỗ ấm, và ánh sáng tự nhiên từ cửa sổ.
+      Nhiệm vụ: Gợi ý 3 góc chụp đời thường (lifestyle corners) khác nhau trong căn hộ này.
+      + Quan trọng: Các không gian phải được trang trí theo lối sống thực tế (lived-in), có các đồ vật decor mềm mại như thảm lông, rèm voan, gương toàn thân, tạp chí, cốc cafe... để tạo cảm giác gần gũi.
       Yêu cầu đầu ra:
-      - Chỉ trả về một JSON Array chứa 3 chuỗi string.
-      - Nội dung mỗi chuỗi phải Ngắn gọn, súc tích (dưới 10 từ).
-      - KHÔNG có lời dẫn, không đánh số.
-      
-      Ví dụ output mong muốn:
-      ["Sảnh tòa nhà hiện đại", "Quán cafe phong cách Vintage", "Đường phố Tokyo về đêm"]
+      - Chỉ trả về một JSON Array chứa 3 chuỗi string bằng Tiếng Anh.
+      - Các mô tả cần chi tiết, giàu hình ảnh và không khí (không giới hạn số từ).
+      Ví dụ output mong muốn (Mô tả kiểu gần gũi): ["A cozy living room corner with a grey fabric sofa, a textured concrete wall softened by a beige rug and a standing lamp, natural light coming from the balcony.", "A bright bedroom setup with a white messy bed, a large leaning floor mirror reflecting the window view, and some fashion magazines on the floor.", "A clean aesthetic workspace area with a wooden desk, a grid moodboard on the concrete wall, and a pot of monstera plant receiving sunlight."]"
     `;
 
     const response = await ai.models.generateContent({
@@ -153,6 +148,7 @@ export const suggestBackgrounds = async (apiKey: string, imageBase64: string): P
     const text = response.text || "";
     
     try {
+      // Clean potential markdown blocks if API returns ```json ... ```
       const cleanedText = text.replace(/```json|```/g, '').trim();
       const json = JSON.parse(cleanedText);
       if (Array.isArray(json)) {
@@ -161,6 +157,7 @@ export const suggestBackgrounds = async (apiKey: string, imageBase64: string): P
       return ["Studio phông trắng", "Đường phố hiện đại", "Quán cafe sang trọng"];
     } catch (e) {
       console.warn("JSON Parse Error for suggestions", e);
+      // Fallback parser if JSON fails
       return text.split('\n')
         .map(line => line.replace(/^\d+[\.\)]\s*|-\s*/, '').trim())
         .filter(line => line.length > 0 && line.length < 50 && !line.includes("Dưới đây"))
@@ -174,13 +171,12 @@ export const suggestBackgrounds = async (apiKey: string, imageBase64: string): P
 
 // Step 2: Change Background
 export const changeBackground = async (
-  apiKey: string,
   baseImageBase64: string,
   prompt: string,
   backgroundImage?: ProcessedImage | null
 ): Promise<string> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     let finalPrompt = `
       Nhiệm vụ: Thay đổi bối cảnh (background).
@@ -233,9 +229,9 @@ export const changeBackground = async (
 };
 
 // NEW: Analyze image to generate 5 Video Prompts AND 2 Voiceover Scripts
-export const generateVideoPrompt = async (apiKey: string, imageBase64: string): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
+export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const prompt = `
     Phân tích bức ảnh này và thực hiện 2 nhiệm vụ:
@@ -307,124 +303,35 @@ export const generateVideoPrompt = async (apiKey: string, imageBase64: string): 
   }
 };
 
-// NEW: Generate Audio (EverAI)
-export const generateSpeech = async (text: string, _voiceName: string): Promise<string> => {
+// NEW: Generate Audio (TTS)
+export const generateSpeech = async (text: string, voiceName: string): Promise<string> => {
   try {
-    // 1. Create Request using Relative Proxy Path
-    // Using Authorization header as requested
-    const response = await fetch(`${PROXY_BASE_URL}/v1/text-to-speech`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${EVERAI_API_KEY}`
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    const response = await ai.models.generateContent({
+      model: TTS_MODEL_NAME,
+      contents: [{ parts: [{ text: text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: voiceName },
+            },
+        },
       },
-      body: JSON.stringify({
-        text: text,
-        voice_code: EVERAI_VOICE_CODE,
-        speed: 1
-      })
     });
 
-    if (!response.ok) {
-        let errText = await response.text();
-        try {
-            const errJson = JSON.parse(errText);
-            errText = errJson.message || errJson.error || errText;
-        } catch(e) {}
-        throw new Error(`EverAI API Error (${response.status}): ${errText}`);
+    const base64Pcm = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    
+    if (!base64Pcm) {
+      throw new Error("AI did not return audio data.");
     }
 
-    const data = await response.json();
-    
-    // Check if it returns a file_url directly
-    if (data.file_url || (data.data && data.data.file_url)) {
-        const url = data.file_url || data.data.file_url;
-        return await fetchAudioAsBase64(url);
-    }
-    
-    // If it returns an ID, we poll
-    const requestId = data.id || data.request_id || (data.result && data.result.id);
-    if (!requestId) {
-        throw new Error("Không tìm thấy ID request hoặc URL audio từ EverAI.");
-    }
-
-    // 2. Poll for Result
-    const audioUrl = await pollEverAIResult(requestId);
-    
-    // 3. Download and convert to Base64
-    return await fetchAudioAsBase64(audioUrl);
+    // Wrap raw PCM in a WAV header so it can be played/downloaded
+    return addWavHeader(base64Pcm);
 
   } catch (error: any) {
-    console.error("EverAI TTS Error:", error);
-    throw new Error(error.message || "Lỗi tạo giọng nói EverAI.");
+    console.error("TTS Error:", error);
+    throw new Error(error.message || "Lỗi tạo giọng nói.");
   }
 };
-
-// Helper: Poll EverAI Request Status
-// Updated based on documentation: GET /v1/tts/{request_id}
-async function pollEverAIResult(requestId: string, maxAttempts = 15, intervalMs = 2000): Promise<string> {
-    for (let i = 0; i < maxAttempts; i++) {
-        await new Promise(r => setTimeout(r, intervalMs));
-        
-        try {
-            // Updated Endpoint: /v1/tts/${requestId}
-            const response = await fetch(`${PROXY_BASE_URL}/v1/tts/${requestId}`, {
-                method: 'GET',
-                headers: { 
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${EVERAI_API_KEY}` 
-                }
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                
-                // Parse structure: { status: 1, result: { status: 'done', audio_link: '...' } }
-                if (data.status === 1 && data.result) {
-                    const taskStatus = data.result.status;
-                    
-                    if (taskStatus === 'done' && data.result.audio_link) {
-                        return data.result.audio_link;
-                    }
-                    
-                    if (taskStatus === 'failed') {
-                        throw new Error("EverAI trả về trạng thái lỗi (failed).");
-                    }
-                    // If 'processing', continue loop
-                } else if (data.status === 0 || data.error) {
-                    throw new Error(`EverAI lỗi: ${data.message || 'Unknown error'}`);
-                }
-            }
-        } catch (e: any) {
-            console.warn("Polling error", e);
-            if (e.message && e.message.includes("failed")) throw e;
-        }
-    }
-    throw new Error("Timeout: EverAI xử lý quá lâu.");
-}
-
-// Helper: Fetch Audio URL and convert to Base64
-async function fetchAudioAsBase64(url: string): Promise<string> {
-    let fetchUrl = url;
-    if (url.includes('everai.vn')) {
-        // Rewrite to use local proxy to avoid CORS/SSL issues with the direct link
-        fetchUrl = url.replace('https://www.everai.vn/api', PROXY_BASE_URL);
-        fetchUrl = fetchUrl.replace('https://api.everai.vn', PROXY_BASE_URL); // fallback
-    }
-
-    const response = await fetch(fetchUrl);
-    if (!response.ok) throw new Error("Không thể tải file audio.");
-    
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const base64Data = reader.result as string;
-            // Return raw base64 (remove data prefix)
-            const rawBase64 = base64Data.split(',')[1];
-            resolve(rawBase64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-}

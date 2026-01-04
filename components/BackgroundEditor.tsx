@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ProcessedImage, BackgroundState, GeneratedBackground } from '../types';
 import { suggestBackgrounds, changeBackground, generateVideoPrompt, generateSpeech } from '../services/geminiService';
+import { saveToDB, loadFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage } from '../services/storage';
 import { ImageUploader } from './ImageUploader';
-import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Trash2, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play } from 'lucide-react';
+import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play } from 'lucide-react';
 
 interface BackgroundEditorProps {
   initialBaseImage: string | null;
-  apiKey: string;
 }
 
-export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseImage, apiKey }) => {
+export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseImage }) => {
   const [state, setState] = useState<BackgroundState>({
     selectedBaseImage: initialBaseImage,
     backgroundImage: null,
@@ -24,24 +24,91 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   const [mode, setMode] = useState<'UPLOAD' | 'PROMPT' | 'KEEP'>('UPLOAD');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
+  const [isLoadingStorage, setIsLoadingStorage] = useState(true);
   
   // Accordion state: 'video' | 'voiceover' | null
   const [openSection, setOpenSection] = useState<string | null>('video');
 
-  // TTS State - Voice selection is effectively disabled for EverAI in this version as code is hardcoded
-  const [selectedVoice, setSelectedVoice] = useState('Default (EverAI)');
+  // TTS State
+  const [selectedVoice, setSelectedVoice] = useState('Kore');
+  const VOICES = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
 
-  // Sync prop to state if it changes
+  // 1. Sync prop to state if it changes (Priority over local storage if explicit navigation)
   useEffect(() => {
-    if (initialBaseImage) {
+    // Nếu initialBaseImage là null (do bấm Reset ở App.tsx), ta cần xoá sạch state
+    if (initialBaseImage === null) {
+        setState({
+            selectedBaseImage: null,
+            backgroundImage: null,
+            textPrompt: '',
+            aiSuggestions: [],
+            isSuggesting: false,
+            isGenerating: false,
+            results: [],
+            error: null,
+        });
+        setMode('UPLOAD');
+    } 
+    // Nếu có ảnh mới được chuyển từ Bước 1 sang
+    else if (initialBaseImage && initialBaseImage !== state.selectedBaseImage) {
       setState(prev => ({ 
         ...prev, 
         selectedBaseImage: initialBaseImage,
-        results: [], 
-        error: null,
+        results: [], // Reset kết quả cũ nếu đổi ảnh gốc
+        error: null
       }));
     }
   }, [initialBaseImage]);
+
+  // 2. Restore from DB on mount
+  useEffect(() => {
+    const restore = async () => {
+        try {
+            const saved = await loadFromDB(KEYS.BG_EDITOR_SESSION);
+            if (saved) {
+                // If initialBaseImage is provided (user came from Step 1 just now), use it.
+                // Otherwise use saved image.
+                const baseImg = initialBaseImage || saved.selectedBaseImage;
+                
+                setState(prev => ({
+                    ...prev,
+                    selectedBaseImage: baseImg,
+                    textPrompt: saved.textPrompt || '',
+                    results: saved.results || [],
+                    backgroundImage: reconstructProcessedImage(saved.backgroundImage)
+                }));
+                if (saved.mode) setMode(saved.mode);
+            }
+        } catch (e) {
+            console.error("BG Editor Restore Error", e);
+        } finally {
+            setIsLoadingStorage(false);
+        }
+    };
+    restore();
+  }, []); // Run once
+
+  // 3. Auto-Save Logic
+  const saveTimeoutRef = useRef<any>(null);
+  useEffect(() => {
+    if (isLoadingStorage) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+        const dataToSave = {
+            selectedBaseImage: state.selectedBaseImage,
+            textPrompt: state.textPrompt,
+            results: state.results, // Contains large base64s
+            backgroundImage: prepareImageForStorage(state.backgroundImage),
+            mode: mode,
+            timestamp: Date.now()
+        };
+        saveToDB(KEYS.BG_EDITOR_SESSION, dataToSave);
+    }, 1000);
+    
+    return () => clearTimeout(saveTimeoutRef.current);
+  }, [state.selectedBaseImage, state.textPrompt, state.results, state.backgroundImage, mode, isLoadingStorage]);
+
 
   // Reset selected index when new results come in (usually prepended to top)
   useEffect(() => {
@@ -55,7 +122,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     if (!state.selectedBaseImage) return;
     setState(prev => ({ ...prev, isSuggesting: true, error: null }));
     try {
-      const suggestions = await suggestBackgrounds(apiKey, state.selectedBaseImage);
+      const suggestions = await suggestBackgrounds(state.selectedBaseImage);
       setState(prev => ({ ...prev, isSuggesting: false, aiSuggestions: suggestions }));
     } catch (err) {
       setState(prev => ({ ...prev, isSuggesting: false, error: "Không lấy được gợi ý." }));
@@ -90,7 +157,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       } else {
          const bgImageParam = mode === 'UPLOAD' ? state.backgroundImage : null;
          const promptParam = mode === 'PROMPT' ? state.textPrompt : '';
-         resultBase64 = await changeBackground(apiKey, state.selectedBaseImage, promptParam, bgImageParam);
+         resultBase64 = await changeBackground(state.selectedBaseImage, promptParam, bgImageParam);
       }
       
       // Create a new result object with loading state for prompts
@@ -115,7 +182,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
       // 2. Automatically generate prompt for THIS specific image
       try {
-        const contentResult = await generateVideoPrompt(apiKey, resultBase64);
+        const contentResult = await generateVideoPrompt(resultBase64);
         
         // Update the specific item in the results array
         setState(prev => {
@@ -175,9 +242,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
         }
         return { ...prev, results: updatedResults };
       });
-    } catch (error: any) {
+    } catch (error) {
        console.error("Audio Gen Error", error);
-       alert("Lỗi khi tạo audio: " + error.message);
+       alert("Lỗi khi tạo audio: " + error);
        // Reset loading
        setState(prev => {
         const updatedResults = [...prev.results];
@@ -202,13 +269,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   };
 
   const handleDownloadAudio = (base64Audio: string) => {
-    // Note: If EverAI returns MP3, but we treat it as WAV/Audio, browsers are usually smart enough.
-    // However, if the source is MP3, downloading as .wav might mislead players.
-    // For safety, we can use .mp3 if we suspect the source is mp3. 
-    // Since we don't strictly know, .wav or .mp3 works in most players.
     const link = document.createElement('a');
-    link.href = `data:audio/mp3;base64,${base64Audio}`;
-    link.download = `voiceover-${Date.now()}.mp3`;
+    link.href = `data:audio/wav;base64,${base64Audio}`;
+    link.download = `voiceover-${selectedVoice}-${Date.now()}.wav`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -229,10 +292,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     }));
   };
 
-  const clearBaseImage = () => {
-      setState(prev => ({ ...prev, selectedBaseImage: null, results: [] }));
-  };
-
   const PROMPT_LABELS = [
       "Mirror Selfie", 
       "Outfit Check", 
@@ -240,6 +299,13 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       "Walking/Spinning",
       "Playful"
   ];
+
+  // Helper object to pass to ImageUploader
+  const currentBaseImageObj = state.selectedBaseImage ? {
+      base64: state.selectedBaseImage,
+      previewUrl: `data:image/png;base64,${state.selectedBaseImage}`,
+      file: new File([], "base_image.png") // Dummy file object for type satisfaction
+  } : null;
 
   // Get current selected item safely
   const currentItem = state.results[selectedIndex];
@@ -275,25 +341,16 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
             {/* Left Column: Inputs */}
             <div className="space-y-6">
             
-            {/* Base Image Preview with Change Option */}
-            <div className="relative group flex gap-4 items-start bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-                <img 
-                src={`data:image/png;base64,${state.selectedBaseImage}`} 
-                className="w-20 h-auto rounded-lg object-contain bg-gray-50 border" 
-                alt="Base"
+            {/* Base Image Preview with CLICKABLE Change Option */}
+            <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+                <ImageUploader 
+                    id="step2-base-image-display"
+                    label="Ảnh gốc (Bấm vào ảnh để thay đổi)"
+                    subLabel="Chọn ảnh khác"
+                    image={currentBaseImageObj}
+                    onImageChange={handleBaseImageUpload}
                 />
-                <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-900">Ảnh gốc đang xử lý</p>
-                    <button 
-                        onClick={clearBaseImage}
-                        className="text-xs text-red-500 flex items-center gap-1 mt-2 hover:bg-red-50 px-2 py-1 rounded-md transition-colors"
-                    >
-                        <Trash2 size={12} /> Thay ảnh khác
-                    </button>
-                </div>
             </div>
-
-            <div className="border-t border-gray-200 my-2"></div>
 
             {/* Mode Selection Tabs */}
             <div className="flex p-1 bg-gray-100 rounded-xl">
@@ -552,7 +609,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                         <div className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-1 rounded-md">
                                             <Mic size={14} />
                                         </div>
-                                        Lời thoại & Thu âm (EverAI)
+                                        Lời thoại & Thu âm (TTS)
                                     </div>
                                     {openSection === 'voiceover' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                 </button>
@@ -560,12 +617,16 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 {openSection === 'voiceover' && (
                                     <div className="p-3 bg-gray-50/50 space-y-4 animate-in slide-in-from-top-2 duration-200">
                                         
-                                        {/* Voice Selector Info */}
+                                        {/* Voice Selector */}
                                         <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-gray-200 shadow-sm">
-                                            <label className="text-xs font-semibold text-gray-600 ml-1">Giọng đọc (Cố định):</label>
-                                            <span className="text-xs font-mono bg-gray-100 text-gray-600 px-2 py-1 rounded">
-                                                EverAI (voice-e7bc94bb)
-                                            </span>
+                                            <label className="text-xs font-semibold text-gray-600 ml-1">Chọn giọng đọc AI:</label>
+                                            <select 
+                                                value={selectedVoice} 
+                                                onChange={(e) => setSelectedVoice(e.target.value)}
+                                                className="text-xs border-none bg-indigo-50 text-indigo-700 font-bold rounded px-2 py-1 focus:ring-0 cursor-pointer hover:bg-indigo-100 transition-colors"
+                                            >
+                                                {VOICES.map(v => <option key={v} value={v}>{v}</option>)}
+                                            </select>
                                         </div>
 
                                         {currentItem.voiceoverScripts && currentItem.voiceoverScripts.length > 0 ? (
@@ -621,13 +682,12 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                                             </button>
                                                         ) : (
                                                             <div className="flex-1 flex flex-col gap-2">
-                                                                {/* Use mp3 type for EverAI usually */}
-                                                                <audio controls src={`data:audio/mp3;base64,${audioData}`} className="w-full h-8" />
+                                                                <audio controls src={`data:audio/wav;base64,${audioData}`} className="w-full h-8" />
                                                                 <button
                                                                     onClick={() => handleDownloadAudio(audioData)}
                                                                     className="flex items-center justify-center gap-1.5 w-full py-1.5 text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 rounded-md transition-colors"
                                                                 >
-                                                                    <Download size={12} /> Tải Audio
+                                                                    <Download size={12} /> Tải Audio ({selectedVoice})
                                                                 </button>
                                                             </div>
                                                         )}
