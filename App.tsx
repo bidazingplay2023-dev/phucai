@@ -1,11 +1,13 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultDisplay } from './components/ResultDisplay';
 import { BackgroundEditor } from './components/BackgroundEditor';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
 import { saveToDB, loadFromDB, clearKeyFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage } from './services/storage';
 import { ProcessedImage, GenerationState, AppConfig, AppStep } from './types';
-import { Sparkles, Settings2, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, Download, RotateCcw, XCircle, Save } from 'lucide-react';
+import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, ArrowRight, CheckCircle2, Download, RotateCcw, XCircle, Save, Key } from 'lucide-react';
 
 const App: React.FC = () => {
   // Loading State for Restoration
@@ -33,13 +35,22 @@ const App: React.FC = () => {
   // Reset Confirmation State
   const [isResetConfirming, setIsResetConfirming] = useState(false);
   
+  // API Key Modal State
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  
   // Reset Key: Used to force re-mounting of components to clear internal state
   const [resetKey, setResetKey] = useState(0);
 
   // --- PERSISTENCE LOGIC START ---
   
-  // 1. Restore data on mount
+  // 1. Restore data on mount AND check API Key
   useEffect(() => {
+    // Check API Key
+    const hasKey = localStorage.getItem('GOOGLE_API_KEY');
+    if (!hasKey) {
+        setIsKeyModalOpen(true);
+    }
+
     const restoreSession = async () => {
       try {
         const savedData = await loadFromDB(KEYS.APP_SESSION);
@@ -129,8 +140,6 @@ const App: React.FC = () => {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isRestoring]); // Re-bind only if restore state changes
-
-  // --- PERSISTENCE LOGIC END ---
 
   // Auto hide reset confirmation after 3 seconds
   useEffect(() => {
@@ -238,6 +247,12 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 pb-20">
+      <ApiKeyModal 
+        isOpen={isKeyModalOpen} 
+        onClose={() => setIsKeyModalOpen(false)} 
+        forceOpen={!localStorage.getItem('GOOGLE_API_KEY')}
+      />
+
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100 shadow-sm">
         <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
@@ -250,7 +265,19 @@ const App: React.FC = () => {
             </h1>
           </div>
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+              <div className="hidden xs:flex text-[10px] font-bold text-indigo-400 bg-indigo-50 px-2 py-1 rounded-md items-center gap-1 mr-1">
+                 <Save size={10} /> Auto-save
+              </div>
+
+              <button
+                onClick={() => setIsKeyModalOpen(true)}
+                className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors"
+                title="Cài đặt API Key"
+              >
+                <Key size={18} />
+              </button>
+
               <button 
                 onClick={handleFullReset}
                 className={`flex items-center gap-2 px-2 py-2 rounded-full transition-all duration-300 ${
@@ -263,15 +290,12 @@ const App: React.FC = () => {
                 {isResetConfirming ? (
                     <>
                         <XCircle size={18} />
-                        <span className="text-xs font-bold whitespace-nowrap">Xác nhận xoá?</span>
+                        <span className="text-xs font-bold whitespace-nowrap">Xác nhận?</span>
                     </>
                 ) : (
                     <RotateCcw size={18} />
                 )}
               </button>
-              <div className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full flex items-center gap-1">
-                 <Save size={10} className="text-indigo-400" /> Auto-save
-              </div>
           </div>
         </div>
       </header>

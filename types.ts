@@ -1,3 +1,5 @@
+
+
 export interface ProcessedImage {
   file: File;
   previewUrl: string;
@@ -24,20 +26,26 @@ export interface GeneratedBackground {
   isVideoPromptLoading: boolean;
   
   // New: Store generated audios for each script index
-  generatedAudios?: { [key: number]: string }; // Index -> Base64 WAV
+  generatedAudios?: { [key: number]: string }; // Index -> Base64 Data
+  audioMimeTypes?: { [key: number]: string }; // Index -> MIME Type (e.g., 'audio/wav', 'audio/mpeg')
   isAudioLoading?: { [key: number]: boolean }; // Index -> Loading state
 }
 
 export interface BackgroundState {
   selectedBaseImage: string | null; // Base64 of the image chosen from Step 1
-  backgroundImage: ProcessedImage | null; // User uploaded background
-  textPrompt: string;
+  
+  // Inputs per mode
+  backgroundImage: ProcessedImage | null; // User uploaded background (UPLOAD Mode)
+  textPrompt: string; // Text prompt (PROMPT Mode)
+  
   aiSuggestions: string[];
   isSuggesting: boolean;
   isGenerating: boolean;
   
-  // Updated: Store objects instead of just strings
-  results: GeneratedBackground[]; 
+  // Separate results for each mode to persist state when switching tabs
+  resultsUpload: GeneratedBackground[];
+  resultsPrompt: GeneratedBackground[];
+  resultsKeep: GeneratedBackground[];
   
   error: string | null;
 }
