@@ -17,6 +17,22 @@ const getApiKey = (): string => {
   return key;
 };
 
+// --- NEW: VALIDATE API KEY ---
+export const validateApiKey = async (apiKey: string): Promise<boolean> => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: apiKey });
+    // Gọi thử một request cực nhẹ (ví dụ: chào 'hi') để xem key có hoạt động không
+    await ai.models.generateContent({
+      model: TEXT_MODEL_NAME,
+      contents: { parts: [{ text: "hi" }] },
+    });
+    return true;
+  } catch (error) {
+    console.error("API Key Validation Failed:", error);
+    return false;
+  }
+};
+
 // GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm
 export const isolateProductImage = async (productImageBase64: string): Promise<string> => {
   try {

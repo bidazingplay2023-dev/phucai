@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { Key, Save, ExternalLink, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { Key, Save, ExternalLink, Eye, EyeOff, AlertTriangle, Loader2 } from 'lucide-react';
+import { validateApiKey } from '../services/geminiService';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -12,6 +13,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
 
   useEffect(() => {
     // Load key from storage when modal opens
@@ -21,24 +23,43 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
     }
   }, [isOpen]);
 
-  const handleSave = () => {
-    if (!apiKey.trim()) {
+  const handleSave = async () => {
+    const trimmedKey = apiKey.trim();
+    if (!trimmedKey) {
       setError('Vui lòng nhập API Key');
       return;
     }
 
-    if (!apiKey.startsWith('AIza')) {
+    if (!trimmedKey.startsWith('AIza')) {
       setError('API Key có vẻ không hợp lệ (thường bắt đầu bằng AIza...)');
-      // Warning only, still allow save
+      // Không return ở đây, để user thử vận may nếu muốn, nhưng phần lớn sẽ fail ở bước validate
     }
 
-    localStorage.setItem('GOOGLE_API_KEY', apiKey.trim());
+    setIsValidating(true);
     setError(null);
-    onClose();
-    // Reload page to ensure services pick up the new key if needed, 
-    // though our service logic reads directly from localStorage so reload isn't strictly necessary.
-    // However, trigger a UI update event is good practice.
-    window.dispatchEvent(new Event('storage'));
+
+    try {
+      // Gọi service để kiểm tra key có hoạt động thật không
+      const isValid = await validateApiKey(trimmedKey);
+      
+      if (!isValid) {
+        setError('API Key không hoạt động! Vui lòng kiểm tra lại (có thể key sai, hết hạn hoặc chưa bật billing).');
+        setIsValidating(false);
+        return;
+      }
+
+      // Nếu Valid
+      localStorage.setItem('GOOGLE_API_KEY', trimmedKey);
+      setIsValidating(false);
+      onClose();
+      
+      // Trigger UI update
+      window.dispatchEvent(new Event('storage'));
+      
+    } catch (e) {
+      setError('Lỗi kết nối khi kiểm tra Key. Vui lòng thử lại.');
+      setIsValidating(false);
+    }
   };
 
   if (!isOpen && !forceOpen) return null;
@@ -80,22 +101,24 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
                   setApiKey(e.target.value);
                   setError(null);
                 }}
+                disabled={isValidating}
                 placeholder="AIzaSy..."
-                className="w-full pl-4 pr-10 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
+                className="w-full pl-4 pr-10 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all disabled:bg-gray-100 disabled:text-gray-500"
               />
               <button
                 type="button"
                 onClick={() => setShowKey(!showKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                disabled={isValidating}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 disabled:opacity-50"
               >
                 {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
             
             {error && (
-              <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 p-2 rounded-lg">
-                <AlertTriangle size={14} />
-                {error}
+              <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 p-2 rounded-lg">
+                <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                <span>{error}</span>
               </div>
             )}
           </div>
@@ -103,13 +126,26 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
           <div className="pt-2">
             <button
               onClick={handleSave}
-              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] shadow-lg shadow-indigo-200"
+              disabled={isValidating}
+              className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg 
+                ${isValidating 
+                  ? 'bg-indigo-400 cursor-not-allowed text-white/80' 
+                  : 'bg-indigo-600 hover:bg-indigo-700 text-white active:scale-[0.98] shadow-indigo-200'}`}
             >
-              <Save size={18} />
-              Lưu & Bắt đầu
+              {isValidating ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  Đang kiểm tra Key...
+                </>
+              ) : (
+                <>
+                  <Save size={18} />
+                  Lưu & Bắt đầu
+                </>
+              )}
             </button>
             
-            {!forceOpen && (
+            {!forceOpen && !isValidating && (
                <button
                 onClick={onClose}
                 className="w-full mt-3 py-2 text-gray-500 hover:text-gray-700 text-sm font-medium"
