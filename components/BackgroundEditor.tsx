@@ -4,7 +4,8 @@ import { ProcessedImage, BackgroundState, GeneratedBackground } from '../types';
 import { suggestBackgrounds, changeBackground, generateVideoPrompt, generateEveraiSpeech } from '../services/geminiService';
 import { saveToDB, loadFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage } from '../services/storage';
 import { ImageUploader } from './ImageUploader';
-import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play, Bot, PencilLine, FileText } from 'lucide-react';
+import { ImagePreviewModal } from './ImagePreviewModal';
+import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play, FileText, Maximize2, CheckCircle2, ChevronUp } from 'lucide-react';
 
 interface BackgroundEditorProps {
   initialBaseImage: string | null;
@@ -20,12 +21,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     aiSuggestions: [],
     isSuggesting: false,
     isGenerating: false,
-    
-    // Initialize separate arrays
     resultsUpload: [],
     resultsPrompt: [],
     resultsKeep: [],
-    
     error: null,
   });
 
@@ -33,11 +31,15 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [isLoadingStorage, setIsLoadingStorage] = useState(true);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null); // For local preview
   
-  // Accordion state: 'video' | 'voiceover' | null
   const [openSection, setOpenSection] = useState<string | null>('video');
 
-  // Helper to get the current active results list
+  // Accordion State
+  const [step1Open, setStep1Open] = useState(true);
+  const [step2Open, setStep2Open] = useState(false);
+
   const getCurrentResults = (): GeneratedBackground[] => {
     switch (mode) {
         case 'UPLOAD': return state.resultsUpload;
@@ -47,7 +49,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     }
   };
 
-  // Helper to get the key name for state updates
   const getCurrentResultKey = (targetMode: EditorMode = mode): keyof BackgroundState => {
       switch (targetMode) {
           case 'UPLOAD': return 'resultsUpload';
@@ -57,7 +58,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       }
   };
 
-  // 1. Sync prop to state if it changes
   useEffect(() => {
     if (initialBaseImage === null) {
         setState({
@@ -73,6 +73,8 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
             error: null,
         });
         setMode('UPLOAD');
+        setStep1Open(true);
+        setStep2Open(false);
     } 
     else if (initialBaseImage && initialBaseImage !== state.selectedBaseImage) {
       setState(prev => ({ 
@@ -83,10 +85,21 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
         resultsKeep: [],
         error: null
       }));
+      // Auto accordion logic handled in next effect
     }
   }, [initialBaseImage]);
 
-  // 2. Restore from DB on mount
+  // Auto-Accordion Logic when Image Changes
+  useEffect(() => {
+     if (state.selectedBaseImage) {
+         setStep1Open(false);
+         setStep2Open(true);
+     } else {
+         setStep1Open(true);
+         setStep2Open(false);
+     }
+  }, [state.selectedBaseImage]);
+
   useEffect(() => {
     const restore = async () => {
         try {
@@ -98,13 +111,18 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                     ...prev,
                     selectedBaseImage: baseImg,
                     textPrompt: saved.textPrompt || '',
-                    // Restore separate lists, fallback to empty array
                     resultsUpload: saved.resultsUpload || [],
                     resultsPrompt: saved.resultsPrompt || [],
                     resultsKeep: saved.resultsKeep || [],
                     backgroundImage: reconstructProcessedImage(saved.backgroundImage)
                 }));
                 if (saved.mode) setMode(saved.mode);
+                
+                // Set initial accordion state based on restored data
+                if (baseImg) {
+                    setStep1Open(false);
+                    setStep2Open(true);
+                }
             }
         } catch (e) {
             console.error("BG Editor Restore Error", e);
@@ -115,7 +133,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     restore();
   }, []); 
 
-  // 3. Auto-Save Logic
   const saveTimeoutRef = useRef<any>(null);
   useEffect(() => {
     if (isLoadingStorage) return;
@@ -125,7 +142,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
         const dataToSave = {
             selectedBaseImage: state.selectedBaseImage,
             textPrompt: state.textPrompt,
-            // Save all lists
             resultsUpload: state.resultsUpload,
             resultsPrompt: state.resultsPrompt,
             resultsKeep: state.resultsKeep,
@@ -139,13 +155,11 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     return () => clearTimeout(saveTimeoutRef.current);
   }, [state, mode, isLoadingStorage]);
 
-  // Reset selected index when SWITCHING MODES
   useEffect(() => {
     setSelectedIndex(0);
     setOpenSection('video');
   }, [mode]);
 
-  // Auto-select top item when current list grows
   const currentResultsLength = getCurrentResults().length;
   useEffect(() => {
     if (currentResultsLength > 0) {
@@ -180,7 +194,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       return;
     }
 
-    // Capture current mode to ensure result goes to correct list even if user clicks tab quickly
     const executionMode = mode;
     const targetKey = getCurrentResultKey(executionMode);
 
@@ -209,7 +222,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       };
 
       setState(prev => {
-          // Access the correct list based on executionMode
           const currentList = prev[targetKey] as GeneratedBackground[];
           const updatedList = isRegenerate ? [newResultItem, ...currentList] : [newResultItem];
           
@@ -232,7 +244,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
     if (!item) return;
 
-    // Set loading state for this specific item in the specific list
     setState(prev => {
         const list = [...(prev[targetKey] as GeneratedBackground[])];
         list[index] = { ...list[index], isVideoPromptLoading: true };
@@ -288,7 +299,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   const handleGenerateAudio = async (scriptIndex: number, text: string) => {
     const targetKey = getCurrentResultKey();
 
-    // Set Loading State
     setState(prev => {
       const list = [...(prev[targetKey] as GeneratedBackground[])];
       const currentItem = { ...list[selectedIndex] };
@@ -302,7 +312,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     try {
       const audioUrl = await generateEveraiSpeech(text);
       
-      // Update Audio Data
       setState(prev => {
         const list = [...(prev[targetKey] as GeneratedBackground[])];
         const currentItem = { ...list[selectedIndex] };
@@ -358,6 +367,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       resultsKeep: [],
       error: null
     }));
+    // Note: useEffect will handle accordion state
   };
 
   const PROMPT_LABELS = [
@@ -379,25 +389,29 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
       file: new File([], "base_image.png")
   } : null;
 
-  // Get current selected item safely from the active mode's list
   const activeList = getCurrentResults();
   const currentItem = activeList[selectedIndex];
   const hasContent = currentItem?.videoPrompts && currentItem.videoPrompts.length > 0;
+  const currentImageUrl = currentItem ? `data:image/png;base64,${currentItem.base64}` : null;
+
+  const handlePreview = (url: string) => {
+      setPreviewUrl(url);
+      setIsPreviewOpen(true);
+  };
 
   return (
-    <div className="animate-in slide-in-from-right duration-500 pb-10">
+    <div className="animate-in fade-in duration-500 pb-10">
       
-      {!state.selectedBaseImage ? (
-          <div className="flex flex-col items-center justify-center min-h-[300px] bg-white rounded-2xl border-2 border-dashed border-indigo-200 p-8 text-center space-y-4">
-              <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center">
-                  <Upload size={32} />
+      {!state.selectedBaseImage && mode === 'UPLOAD' && state.resultsUpload.length === 0 && !state.selectedBaseImage ? (
+          /* EMPTY STATE - INITIAL */
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 flex flex-col items-center justify-center min-h-[400px] text-center max-w-2xl mx-auto">
+              <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-6">
+                  <Upload size={36} />
               </div>
-              <div>
-                  <h3 className="text-lg font-bold text-gray-800">Tải ảnh mẫu cần đổi nền</h3>
-                  <p className="text-sm text-gray-500 mt-1 max-w-xs mx-auto">
-                      Bạn có thể dùng kết quả từ bước "Mặc thử" hoặc tải ảnh trực tiếp từ máy lên đây.
-                  </p>
-              </div>
+              <h3 className="text-xl font-bold text-gray-800 mb-2">Tải ảnh mẫu cần đổi nền</h3>
+              <p className="text-gray-500 mb-8 max-w-sm mx-auto">
+                  Bạn có thể dùng kết quả từ bước "Mặc thử" hoặc tải ảnh trực tiếp từ máy lên đây.
+              </p>
               <div className="w-full max-w-xs">
                  <ImageUploader 
                     id="base-image-upload"
@@ -409,441 +423,463 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
               </div>
           </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Left Column: Inputs */}
-            <div className="space-y-6">
+        /* 2-COLUMN LAYOUT START */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
             
-            <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-                <ImageUploader 
-                    id="step2-base-image-display"
-                    label="Ảnh gốc (Bấm vào ảnh để thay đổi)"
-                    subLabel="Chọn ảnh khác"
-                    image={currentBaseImageObj}
-                    onImageChange={handleBaseImageUpload}
-                />
-            </div>
-
-            {/* Mode Selection Tabs */}
-            <div className="flex p-1 bg-gray-100 rounded-xl">
-                <button
-                onClick={() => setMode('UPLOAD')}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all duration-200 ${
-                    mode === 'UPLOAD' 
-                    ? 'bg-white shadow text-indigo-600' 
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
-                }`}
-                >
-                <Image size={16} />
-                Dùng ảnh nền
-                </button>
-                <button
-                onClick={() => setMode('PROMPT')}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all duration-200 ${
-                    mode === 'PROMPT' 
-                    ? 'bg-white shadow text-indigo-600' 
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
-                }`}
-                >
-                <Type size={16} />
-                Mô tả AI
-                </button>
-                <button
-                onClick={() => setMode('KEEP')}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all duration-200 ${
-                    mode === 'KEEP' 
-                    ? 'bg-white shadow text-indigo-600' 
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
-                }`}
-                >
-                <MonitorPlay size={16} />
-                Giữ nguyên
-                </button>
-            </div>
-
-            {/* Option A: Custom Background Image */}
-            {mode === 'UPLOAD' && (
-                <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-800 mb-2">
-                    <strong>Chế độ:</strong> Sử dụng ảnh nền có sẵn của bạn. AI sẽ ghép người mẫu vào ảnh này.
-                </div>
-                <ImageUploader
-                    id="bg-upload"
-                    label="Tải ảnh nền"
-                    subLabel="Tải ảnh phong cảnh, studio..."
-                    image={state.backgroundImage}
-                    onImageChange={(img) => setState(prev => ({ ...prev, backgroundImage: img }))}
-                />
-                </div>
-            )}
-
-            {/* Option B: Text Prompt & Suggestions */}
-            {mode === 'PROMPT' && (
-                <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-800 mb-2">
-                    <strong>Chế độ:</strong> AI sẽ vẽ bối cảnh dựa trên mô tả của bạn.
-                </div>
-                <div className="flex justify-between items-center">
-                    <span className="text-sm font-semibold text-gray-700">Mô tả bối cảnh</span>
-                    <button 
-                        onClick={handleSuggest}
-                        disabled={state.isSuggesting}
-                        className="text-xs flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg hover:bg-indigo-100 transition-colors"
-                    >
-                        {state.isSuggesting ? <Loader2 size={12} className="animate-spin" /> : <Lightbulb size={12} />}
-                        Gợi ý cho tôi
-                    </button>
-                </div>
-
-                {state.aiSuggestions.length > 0 && (
-                    <div className="flex flex-wrap gap-2 animate-in fade-in">
-                    {state.aiSuggestions.map((sugg, idx) => (
-                        <button
-                        key={idx}
-                        onClick={() => setState(prev => ({ ...prev, textPrompt: sugg }))}
-                        className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-3 py-1.5 rounded-full hover:bg-purple-100 transition-colors text-left"
-                        >
-                        {sugg}
-                        </button>
-                    ))}
-                    </div>
-                )}
-
-                <textarea
-                    value={state.textPrompt}
-                    onChange={(e) => setState(prev => ({ ...prev, textPrompt: e.target.value }))}
-                    placeholder="Ví dụ: Góc studio tại nhà phong cách Hàn Quốc, tường trát vữa, gương toàn thân và ánh nắng tự nhiên..."
-                    className="w-full p-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm h-24 resize-none"
-                />
-                </div>
-            )}
-
-             {/* Option C: Keep Original */}
-             {mode === 'KEEP' && (
-                <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-indigo-100 rounded-lg p-4 text-sm text-indigo-800 mb-2 flex gap-3">
-                         <div className="bg-white p-2 rounded-full h-fit shadow-sm text-indigo-600">
-                            <MonitorPlay size={20} />
-                         </div>
-                         <div>
-                            <strong className="block mb-1">Chế độ tạo Prompt Video</strong>
-                            <p className="text-xs opacity-90 leading-relaxed">
-                                Hệ thống sẽ giữ nguyên ảnh hiện tại và cho phép bạn tạo kịch bản Video & Voice thủ công.
-                            </p>
-                         </div>
-                    </div>
-                </div>
-            )}
-
-            {state.error && (
-                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-lg flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-red-600" />
-                {state.error}
-                </div>
-            )}
-
-            <button
-                onClick={() => handleGenerate(false)}
-                disabled={state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)}
-                className={`
-                w-full py-3.5 px-6 rounded-xl font-bold text-white shadow-lg
-                flex items-center justify-center gap-2 transition-all
-                ${state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)
-                    ? 'bg-gray-400 cursor-not-allowed' 
-                    : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98]'}
-                `}
-            >
-                {state.isGenerating && activeList.length === 0 ? (
-                <>
-                    <Loader2 className="animate-spin" size={20} />
-                    <span>Đang xử lý...</span>
-                </>
-                ) : (
-                <>
-                    {mode === 'KEEP' ? <Video size={20} /> : <Sparkles size={20} />}
-                    <span>
-                        {mode === 'UPLOAD' ? 'Ghép vào nền này' : mode === 'PROMPT' ? 'Tạo bối cảnh mới' : 'Tạo Prompt Video ngay'}
-                    </span>
-                </>
-                )}
-            </button>
-            </div>
-
-            {/* Right Column: Result */}
-            <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200 flex flex-col min-h-[500px]">
-            {/* Header indicating which list we are viewing */}
-            <div className="mb-2 flex items-center justify-between text-xs font-semibold text-gray-500 uppercase tracking-wider">
-               <span>Kết quả: {mode === 'UPLOAD' ? 'Ảnh nền tự chọn' : mode === 'PROMPT' ? 'Mô tả AI' : 'Giữ nguyên'}</span>
-               <span className="bg-gray-100 px-2 py-0.5 rounded-md">{activeList.length} ảnh</span>
-            </div>
-
-            {activeList.length > 0 && currentItem ? (
-                <div className="w-full flex flex-col gap-4 animate-in zoom-in-95 duration-300 h-full">
+            {/* LEFT COLUMN: CONTROLS (35%) */}
+            <div className="lg:col-span-4 space-y-5">
                 
-                {/* Main Image View */}
-                <div className="relative w-full aspect-[9/16] rounded-xl overflow-hidden shadow-lg bg-gray-900 group">
-                    <img 
-                        src={`data:image/png;base64,${currentItem.base64}`} 
-                        className="w-full h-full object-contain"
-                        alt="Final Result"
-                    />
-                </div>
-
-                {/* Thumbnails - Only show if current list has > 1 */}
-                {activeList.length > 1 && (
-                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                        {activeList.map((res, idx) => (
-                            <button
-                            key={idx}
-                            onClick={() => setSelectedIndex(idx)}
-                            className={`relative flex-shrink-0 w-14 h-20 rounded-md overflow-hidden border-2 transition-all ${
-                                idx === selectedIndex ? 'border-indigo-600 ring-2 ring-indigo-100' : 'border-transparent opacity-60 hover:opacity-100'
-                            }`}
-                            >
-                            <img 
-                                src={`data:image/png;base64,${res.base64}`} 
-                                className="w-full h-full object-cover" 
-                                alt={`Thumb ${idx}`}
-                            />
-                            {idx === selectedIndex && (
-                                <div className="absolute inset-0 bg-indigo-900/10 flex items-center justify-center">
-                                <Check size={12} className="text-white drop-shadow-md" />
+                {/* STEP 1: BASE IMAGE - ACCORDION */}
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden transition-all duration-300">
+                    {/* Header */}
+                    <div 
+                        onClick={() => setStep1Open(!step1Open)}
+                        className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors select-none"
+                    >
+                         <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-sm">1</div>
+                            <div>
+                                <h3 className="font-bold text-gray-800">Ảnh gốc</h3>
+                                {!step1Open && state.selectedBaseImage && (
+                                    <div className="flex items-center gap-1.5 mt-0.5 animate-in fade-in">
+                                        <CheckCircle2 size={12} className="text-green-600" />
+                                        <span className="text-xs text-green-700 font-medium">Đã chọn</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            {!step1Open && state.selectedBaseImage && (
+                                <div 
+                                    className="w-10 h-10 bg-white rounded border border-gray-200 p-0.5 animate-in zoom-in hover:border-indigo-300 transition-colors cursor-pointer"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handlePreview(`data:image/png;base64,${state.selectedBaseImage}`);
+                                    }}
+                                >
+                                    <img src={`data:image/png;base64,${state.selectedBaseImage}`} className="w-full h-full object-contain" alt="Mini Base" />
                                 </div>
                             )}
-                            </button>
-                        ))}
+                            {step1Open ? <ChevronUp size={20} className="text-gray-400" /> : <ChevronDown size={20} className="text-gray-400" />}
+                        </div>
                     </div>
-                )}
 
-                {/* Content Generation Result - ACCORDION STYLE */}
-                <div className="bg-white rounded-xl border border-indigo-100 shadow-sm overflow-hidden animate-in slide-in-from-bottom-4 transition-all">
-                    
-                    {currentItem.isVideoPromptLoading ? (
-                        <div className="p-4 flex flex-col items-center justify-center gap-3 py-8 text-gray-500">
-                            <Loader2 size={24} className="animate-spin text-indigo-600" />
-                            <p className="text-sm">Đang phân tích hình ảnh và viết kịch bản...</p>
-                        </div>
-                    ) : !hasContent ? (
-                        /* Manual Trigger Button */
-                        <div className="p-5 flex flex-col items-center text-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center">
-                                <FileText size={20} />
-                            </div>
-                            <div>
-                                <h4 className="font-bold text-gray-800 text-sm">Chưa có kịch bản</h4>
-                                <p className="text-xs text-gray-500 mt-1">
-                                    Tạo prompt cho video và lời thoại bán hàng từ hình ảnh này.
-                                </p>
-                            </div>
-                            <button
-                                onClick={() => handleAnalyzeContent(selectedIndex)}
-                                className="w-full mt-1 bg-gradient-to-r from-orange-500 to-pink-500 hover:from-orange-600 hover:to-pink-600 text-white font-semibold py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 text-sm transition-all active:scale-[0.98]"
-                            >
-                                <Sparkles size={16} />
-                                Phân tích & Viết kịch bản
-                            </button>
-                        </div>
-                    ) : (
-                        /* Show Accordions if Content Exists */
-                        <div className="divide-y divide-gray-100">
-                             {/* Accordion 1: Video Prompts */}
-                             <div>
-                                <button 
-                                    onClick={() => setOpenSection(openSection === 'video' ? null : 'video')}
-                                    className={`w-full flex items-center justify-between p-3.5 text-sm font-bold text-gray-800 hover:bg-gray-50 transition-colors ${openSection === 'video' ? 'bg-gray-50' : ''}`}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <div className="bg-gradient-to-r from-pink-500 to-orange-500 text-white p-1 rounded-md">
-                                            <Video size={14} />
-                                        </div>
-                                        Kịch bản Video (Prompt Video)
-                                    </div>
-                                    {openSection === 'video' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                </button>
-                                
-                                {openSection === 'video' && (
-                                    <div className="p-3 bg-gray-50/50 space-y-2 animate-in slide-in-from-top-2 duration-200">
-                                        {currentItem.videoPrompts && currentItem.videoPrompts.length > 0 ? (
-                                            currentItem.videoPrompts.map((prompt, idx) => {
-                                                const promptId = `vid-${idx}`;
-                                                const isCopied = copiedIndex === promptId;
-                                                return (
-                                                <div key={idx} className="flex items-center justify-between p-2.5 bg-white border border-gray-200 rounded-lg shadow-sm gap-3 group hover:border-indigo-200 transition-all">
-                                                    <div className="flex items-center gap-2 overflow-hidden flex-1" title={prompt}>
-                                                        <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 bg-gray-100 px-2 py-1 rounded-md min-w-fit">
-                                                            {PROMPT_LABELS[idx] || `OPT ${idx + 1}`}
-                                                        </div>
-                                                        <div className="text-xs text-gray-600 truncate flex-1 select-all cursor-text">
-                                                            {prompt}
-                                                        </div>
-                                                    </div>
-                                                    
-                                                    <button 
-                                                        onClick={() => copyToClipboard(prompt, promptId)}
-                                                        className={`p-1.5 rounded-md transition-all shrink-0 flex items-center justify-center gap-1 ${
-                                                            isCopied 
-                                                            ? 'bg-green-500 text-white shadow-md' 
-                                                            : 'bg-gray-100 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
-                                                        }`}
-                                                        title="Sao chép"
-                                                    >
-                                                        {isCopied ? <Check size={14} strokeWidth={3} /> : <Copy size={14} />}
-                                                    </button>
-                                                </div>
-                                            )})
-                                        ) : (
-                                            <div className="text-xs text-red-500 p-2">Không có prompt nào được tạo.</div>
-                                        )}
-                                    </div>
-                                )}
-                             </div>
-
-                             {/* Accordion 2: Voiceover Scripts & Audio Gen */}
-                             <div>
-                                <button 
-                                    onClick={() => setOpenSection(openSection === 'voiceover' ? null : 'voiceover')}
-                                    className={`w-full flex items-center justify-between p-3.5 text-sm font-bold text-gray-800 hover:bg-gray-50 transition-colors ${openSection === 'voiceover' ? 'bg-gray-50' : ''}`}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <div className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-1 rounded-md">
-                                            <Mic size={14} />
-                                        </div>
-                                        Lời thoại & Thu âm (TTS)
-                                    </div>
-                                    {openSection === 'voiceover' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                </button>
-                                
-                                {openSection === 'voiceover' && (
-                                    <div className="p-3 bg-gray-50/50 space-y-4 animate-in slide-in-from-top-2 duration-200">
-                                        
-                                        <div className="bg-pink-50 border border-pink-100 p-2 rounded-lg flex items-center gap-2 text-xs text-pink-700">
-                                            <Bot size={14} />
-                                            <span className="font-semibold">Voice:</span> Giọng đọc AI độc quyền (Everai.vn)
-                                        </div>
-
-                                        {currentItem.voiceoverScripts && currentItem.voiceoverScripts.length > 0 ? (
-                                            currentItem.voiceoverScripts.map((script, idx) => {
-                                                const scriptId = `voice-${idx}`;
-                                                const isCopied = copiedIndex === scriptId;
-                                                const isAudioLoading = currentItem.isAudioLoading?.[idx];
-                                                const audioData = currentItem.generatedAudios?.[idx];
-
-                                                return (
-                                                <div key={idx} className="flex flex-col p-3 bg-white border border-gray-200 rounded-lg shadow-sm gap-3 group hover:border-indigo-200 transition-all">
-                                                    {/* Header: Option label + Copy */}
-                                                    <div className="flex justify-between items-center gap-2">
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="text-[10px] font-bold uppercase tracking-wider text-white bg-indigo-400 px-2 py-0.5 rounded-md">
-                                                                {VOICEOVER_LABELS[idx] || `Kịch bản ${idx + 1}`}
-                                                            </span>
-                                                            <span className="text-[10px] text-gray-400 flex items-center gap-1">
-                                                                <PencilLine size={10} /> Chỉnh sửa được
-                                                            </span>
-                                                        </div>
-                                                        <button 
-                                                            onClick={() => copyToClipboard(script, scriptId)}
-                                                            className={`p-1.5 rounded-md transition-all shrink-0 flex items-center justify-center gap-1 ${
-                                                                isCopied 
-                                                                ? 'bg-green-500 text-white shadow-md' 
-                                                                : 'bg-gray-100 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
-                                                            }`}
-                                                            title="Sao chép văn bản"
-                                                        >
-                                                            {isCopied ? <Check size={14} strokeWidth={3} /> : <Copy size={14} />}
-                                                        </button>
-                                                    </div>
-                                                    
-                                                    {/* Script Content - Editable */}
-                                                    <textarea
-                                                        value={script}
-                                                        onChange={(e) => handleScriptChange(idx, e.target.value)}
-                                                        className="w-full text-xs text-gray-800 leading-relaxed bg-white p-2.5 rounded border border-gray-300 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all shadow-sm placeholder-gray-400"
-                                                        placeholder="Nhập nội dung kịch bản..."
-                                                    />
-
-                                                    {/* Audio Controls */}
-                                                    <div className="pt-2 border-t border-gray-100 flex items-center gap-2">
-                                                        {!audioData ? (
-                                                            <button 
-                                                                onClick={() => handleGenerateAudio(idx, script)}
-                                                                disabled={isAudioLoading}
-                                                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-md transition-all ${
-                                                                    isAudioLoading 
-                                                                    ? 'bg-gray-100 text-gray-400' 
-                                                                    : 'bg-gradient-to-r from-pink-500 to-rose-500 text-white hover:shadow-md active:scale-[0.98]'
-                                                                }`}
-                                                            >
-                                                                {isAudioLoading ? (
-                                                                    <Loader2 size={12} className="animate-spin" />
-                                                                ) : (
-                                                                    <Play size={12} fill="currentColor" />
-                                                                )}
-                                                                {isAudioLoading ? 'Đang xử lý...' : 'Tạo giọng đọc ngay'}
-                                                            </button>
-                                                        ) : (
-                                                            <div className="flex-1 flex flex-col gap-2 animate-in fade-in">
-                                                                {/* Use SRC directly from URL */}
-                                                                <audio controls src={audioData} className="w-full h-8" />
-                                                                
-                                                                <a
-                                                                    href={`https://apiproxy.coha.workers.dev/download?url=${encodeURIComponent(audioData)}`}
-                                                                    className="flex items-center justify-center gap-1.5 w-full py-1.5 text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 rounded-md transition-colors"
-                                                                >
-                                                                    <Download size={12} /> Tải file MP3 ngay
-                                                                </a>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            )})
-                                        ) : (
-                                            <div className="text-xs text-red-500 p-2">Không có lời thoại nào được tạo.</div>
-                                        )}
-                                    </div>
-                                )}
-                             </div>
+                    {/* Body */}
+                    {step1Open && (
+                         <div className="p-5 border-t border-gray-100 animate-in slide-in-from-top-1 duration-200">
+                            <ImageUploader 
+                                id="step2-base-image-display"
+                                label=""
+                                subLabel="Chọn ảnh khác"
+                                image={currentBaseImageObj}
+                                onImageChange={handleBaseImageUpload}
+                            />
                         </div>
                     )}
                 </div>
 
-                {/* Actions Grid */}
-                <div className="grid grid-cols-2 gap-3 mt-auto">
-                    <button 
-                        onClick={() => handleGenerate(true)}
-                        disabled={state.isGenerating}
-                        className={`
-                        flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-all active:scale-[0.98]
-                        ${state.isGenerating ? 'opacity-70 cursor-wait' : ''}
-                        `}
+                {/* STEP 2: MODE & GENERATE - ACCORDION */}
+                <div className={`bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden transition-all duration-300 ${!state.selectedBaseImage ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
+                    {/* Header */}
+                    <div 
+                        onClick={() => state.selectedBaseImage && setStep2Open(!step2Open)}
+                        className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors select-none"
                     >
-                        {state.isGenerating ? (
-                        <RefreshCw size={20} className="animate-spin" />
-                        ) : (
-                        <Plus size={20} />
-                        )}
-                        {state.isGenerating ? 'Đang tạo...' : 'Tạo thêm'}
-                    </button>
+                         <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-bold text-sm">2</div>
+                            <div>
+                                <h3 className="font-bold text-gray-800">Chế độ & Bối cảnh</h3>
+                                {!step2Open && activeList.length > 0 && (
+                                    <div className="flex items-center gap-1.5 mt-0.5 animate-in fade-in">
+                                        <CheckCircle2 size={12} className="text-green-600" />
+                                        <span className="text-xs text-green-700 font-medium">Đã xử lý</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        {step2Open ? <ChevronUp size={20} className="text-gray-400" /> : <ChevronDown size={20} className="text-gray-400" />}
+                    </div>
 
-                    <button 
-                        onClick={handleDownload}
-                        className="flex items-center justify-center gap-2 bg-green-600 text-white py-3 px-4 rounded-xl font-semibold hover:bg-green-700 transition-colors shadow-md active:scale-[0.98]"
-                    >
-                        <Download size={20} />
-                        Tải ảnh
-                    </button>
+                    {/* Body */}
+                    {step2Open && (
+                        <div className="p-4 border-t border-gray-100 animate-in slide-in-from-top-1 duration-200">
+                            {/* Mode Selection Tabs */}
+                            <div className="flex bg-gray-100 rounded-xl p-1 mb-4">
+                                <button
+                                onClick={() => setMode('UPLOAD')}
+                                className={`flex-1 flex flex-col items-center justify-center py-2 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                                    mode === 'UPLOAD' 
+                                    ? 'bg-white shadow text-indigo-600' 
+                                    : 'text-gray-500 hover:text-gray-700'
+                                }`}
+                                >
+                                <Image size={18} className="mb-1" />
+                                Dùng ảnh nền
+                                </button>
+                                <button
+                                onClick={() => setMode('PROMPT')}
+                                className={`flex-1 flex flex-col items-center justify-center py-2 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                                    mode === 'PROMPT' 
+                                    ? 'bg-white shadow text-indigo-600' 
+                                    : 'text-gray-500 hover:text-gray-700'
+                                }`}
+                                >
+                                <Type size={18} className="mb-1" />
+                                Mô tả AI
+                                </button>
+                                <button
+                                onClick={() => setMode('KEEP')}
+                                className={`flex-1 flex flex-col items-center justify-center py-2 rounded-lg text-xs font-semibold transition-all duration-200 ${
+                                    mode === 'KEEP' 
+                                    ? 'bg-white shadow text-indigo-600' 
+                                    : 'text-gray-500 hover:text-gray-700'
+                                }`}
+                                >
+                                <MonitorPlay size={18} className="mb-1" />
+                                Giữ nguyên
+                                </button>
+                            </div>
+
+                            {/* Dynamic Inputs based on Mode */}
+                            <div className="mb-4">
+                                {mode === 'UPLOAD' && (
+                                    <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                                        <ImageUploader
+                                            id="bg-upload"
+                                            label="Tải ảnh nền"
+                                            subLabel="Phong cảnh, Studio..."
+                                            image={state.backgroundImage}
+                                            onImageChange={(img) => setState(prev => ({ ...prev, backgroundImage: img }))}
+                                        />
+                                    </div>
+                                )}
+
+                                {mode === 'PROMPT' && (
+                                    <div className="space-y-3 animate-in fade-in slide-in-from-left-2 duration-300">
+                                        <div className="flex justify-between items-center">
+                                            <label className="text-sm font-semibold text-gray-700">Mô tả bối cảnh</label>
+                                            <button 
+                                                onClick={handleSuggest}
+                                                disabled={state.isSuggesting}
+                                                className="text-xs flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg hover:bg-indigo-100 transition-colors font-medium"
+                                            >
+                                                {state.isSuggesting ? <Loader2 size={10} className="animate-spin" /> : <Lightbulb size={10} />}
+                                                Gợi ý
+                                            </button>
+                                        </div>
+
+                                        {state.aiSuggestions.length > 0 && (
+                                            <div className="flex flex-wrap gap-2">
+                                            {state.aiSuggestions.map((sugg, idx) => (
+                                                <button
+                                                key={idx}
+                                                onClick={() => setState(prev => ({ ...prev, textPrompt: sugg }))}
+                                                className="text-[10px] bg-purple-50 text-purple-700 border border-purple-100 px-2 py-1 rounded-md hover:bg-purple-100 transition-colors text-left"
+                                                >
+                                                {sugg}
+                                                </button>
+                                            ))}
+                                            </div>
+                                        )}
+
+                                        <textarea
+                                            value={state.textPrompt}
+                                            onChange={(e) => setState(prev => ({ ...prev, textPrompt: e.target.value }))}
+                                            placeholder="Ví dụ: Góc studio tại nhà phong cách Hàn Quốc..."
+                                            className="w-full p-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm h-32 resize-none"
+                                        />
+                                    </div>
+                                )}
+
+                                {mode === 'KEEP' && (
+                                    <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                                        <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex gap-3">
+                                            <div className="bg-white p-1.5 rounded-full h-fit shadow-sm text-blue-600">
+                                                <Video size={16} />
+                                            </div>
+                                            <div>
+                                                <strong className="block text-xs font-bold text-blue-800 mb-0.5">Chế độ tạo Prompt Video</strong>
+                                                <p className="text-[10px] text-blue-700 leading-relaxed opacity-90">
+                                                    Giữ nguyên ảnh hiện tại để tạo kịch bản Video & Voice thủ công mà không thay đổi nền.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {state.error && (
+                                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-xl flex items-center gap-2 border border-red-100 mb-3">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-red-600" />
+                                    {state.error}
+                                </div>
+                            )}
+
+                            {/* Generate Button */}
+                            <button
+                                onClick={() => handleGenerate(false)}
+                                disabled={state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)}
+                                className={`
+                                w-full py-4 rounded-xl font-bold text-white shadow-lg shadow-indigo-200
+                                flex items-center justify-center gap-2 transition-all
+                                ${state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)
+                                    ? 'bg-gray-300 cursor-not-allowed shadow-none' 
+                                    : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98]'}
+                                `}
+                            >
+                                {state.isGenerating && activeList.length === 0 ? (
+                                <>
+                                    <Loader2 className="animate-spin" size={20} />
+                                    <span>Đang xử lý...</span>
+                                </>
+                                ) : (
+                                <>
+                                    {mode === 'KEEP' ? <Video size={20} /> : <Sparkles size={20} />}
+                                    <span>
+                                        {mode === 'UPLOAD' ? 'Ghép vào nền này' : mode === 'PROMPT' ? 'Tạo bối cảnh mới' : 'Tạo Prompt Video ngay'}
+                                    </span>
+                                </>
+                                )}
+                            </button>
+                        </div>
+                    )}
                 </div>
-                </div>
-            ) : (
-                <div className="text-center text-gray-400 flex flex-col items-center justify-center flex-grow h-full">
-                <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-4">
-                    <Sparkles size={32} className="text-gray-400" />
-                </div>
-                <p className="font-medium">Kết quả sẽ hiện ở đây</p>
-                <p className="text-sm mt-1">Chọn bối cảnh và nhấn tạo</p>
-                </div>
-            )}
+
             </div>
+            {/* END LEFT COLUMN */}
+
+            {/* RIGHT COLUMN: PREVIEW (65%) */}
+            <div className="lg:col-span-8 bg-white rounded-2xl shadow-sm border border-gray-200 p-4 min-h-[600px] flex flex-col">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                        Kết quả 
+                        <span className="text-xs font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                           {mode === 'UPLOAD' ? 'Ảnh nền tự chọn' : mode === 'PROMPT' ? 'Mô tả AI' : 'Giữ nguyên'}
+                        </span>
+                    </h3>
+                    <span className="text-xs font-medium text-gray-500">{activeList.length} ảnh</span>
+                </div>
+
+                {activeList.length > 0 && currentItem ? (
+                    <div className="flex-1 flex flex-col gap-5 animate-in fade-in duration-300">
+                    
+                        {/* Main Image View */}
+                        <div 
+                            className="relative w-full aspect-[9/16] max-h-[70vh] rounded-xl overflow-hidden shadow-sm bg-gray-50 group mx-auto cursor-zoom-in"
+                            onClick={() => handlePreview(currentImageUrl!)}
+                        >
+                            <img 
+                                src={currentImageUrl!}
+                                className="w-full h-full object-contain"
+                                alt="Final Result"
+                            />
+                             {/* View Hint */}
+                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors flex items-center justify-center pointer-events-none">
+                                <Maximize2 className="text-white opacity-0 group-hover:opacity-70 transition-opacity drop-shadow-md" size={40} />
+                            </div>
+                        </div>
+
+                        {/* Thumbnails */}
+                        {activeList.length > 1 && (
+                            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide py-1">
+                                {activeList.map((res, idx) => (
+                                    <button
+                                    key={idx}
+                                    onClick={() => setSelectedIndex(idx)}
+                                    className={`relative flex-shrink-0 w-12 h-16 rounded-md overflow-hidden border-2 transition-all ${
+                                        idx === selectedIndex ? 'border-indigo-600 ring-2 ring-indigo-100' : 'border-transparent opacity-60 hover:opacity-100'
+                                    }`}
+                                    >
+                                    <img 
+                                        src={`data:image/png;base64,${res.base64}`} 
+                                        className="w-full h-full object-cover" 
+                                        alt={`Thumb ${idx}`}
+                                    />
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Content Generation Accordions */}
+                        <div className="bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
+                            
+                            {currentItem.isVideoPromptLoading ? (
+                                <div className="p-6 flex flex-col items-center justify-center gap-3 text-gray-500">
+                                    <Loader2 size={24} className="animate-spin text-indigo-600" />
+                                    <p className="text-sm font-medium">Đang viết kịch bản...</p>
+                                </div>
+                            ) : !hasContent ? (
+                                <div className="p-4 flex items-center justify-between gap-4">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 rounded-full bg-white text-orange-500 flex items-center justify-center shadow-sm">
+                                            <FileText size={20} />
+                                        </div>
+                                        <div className="text-sm">
+                                            <p className="font-bold text-gray-800">Chưa có kịch bản</p>
+                                            <p className="text-xs text-gray-500">Tạo prompt video & lời thoại bán hàng.</p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => handleAnalyzeContent(selectedIndex)}
+                                        className="bg-white border border-gray-200 hover:border-orange-300 text-gray-700 hover:text-orange-600 font-semibold py-2 px-4 rounded-lg flex items-center gap-2 text-xs transition-all shadow-sm"
+                                    >
+                                        <Sparkles size={14} />
+                                        Tạo ngay
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="divide-y divide-gray-200">
+                                    {/* Accordion 1: Video Prompts */}
+                                    <div>
+                                        <button 
+                                            onClick={() => setOpenSection(openSection === 'video' ? null : 'video')}
+                                            className="w-full flex items-center justify-between p-3 text-sm font-bold text-gray-700 hover:bg-white transition-colors"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <Video size={16} className="text-pink-500" />
+                                                Kịch bản Video (Prompt)
+                                            </div>
+                                            {openSection === 'video' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                        </button>
+                                        
+                                        {openSection === 'video' && (
+                                            <div className="p-3 bg-white border-t border-gray-100 space-y-2">
+                                                {currentItem.videoPrompts && currentItem.videoPrompts.length > 0 ? (
+                                                    currentItem.videoPrompts.map((prompt, idx) => {
+                                                        const promptId = `vid-${idx}`;
+                                                        const isCopied = copiedIndex === promptId;
+                                                        return (
+                                                        <div key={idx} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg border border-gray-100 gap-3 hover:border-indigo-100 transition-colors">
+                                                            <div className="flex items-center gap-2 overflow-hidden flex-1">
+                                                                <span className="text-[10px] font-bold text-gray-400 bg-white px-1.5 py-0.5 rounded border border-gray-200 min-w-fit">
+                                                                    #{idx + 1}
+                                                                </span>
+                                                                <div className="text-xs text-gray-600 truncate flex-1 select-all cursor-text">
+                                                                    {prompt}
+                                                                </div>
+                                                            </div>
+                                                            <button 
+                                                                onClick={() => copyToClipboard(prompt, promptId)}
+                                                                className={`p-1.5 rounded-md transition-all shrink-0 ${isCopied ? 'text-green-600 bg-green-50' : 'text-gray-400 hover:text-indigo-600 bg-white shadow-sm'}`}
+                                                            >
+                                                                {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                                                            </button>
+                                                        </div>
+                                                    )})
+                                                ) : <span className="text-xs text-red-400">Lỗi hiển thị.</span>}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Accordion 2: Voiceover */}
+                                    <div>
+                                        <button 
+                                            onClick={() => setOpenSection(openSection === 'voiceover' ? null : 'voiceover')}
+                                            className="w-full flex items-center justify-between p-3 text-sm font-bold text-gray-700 hover:bg-white transition-colors"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <Mic size={16} className="text-blue-500" />
+                                                Lời thoại & Thu âm
+                                            </div>
+                                            {openSection === 'voiceover' ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                        </button>
+                                        
+                                        {openSection === 'voiceover' && (
+                                            <div className="p-3 bg-white border-t border-gray-100 space-y-3">
+                                                {currentItem.voiceoverScripts && currentItem.voiceoverScripts.length > 0 ? (
+                                                    currentItem.voiceoverScripts.map((script, idx) => {
+                                                        const scriptId = `voice-${idx}`;
+                                                        const isCopied = copiedIndex === scriptId;
+                                                        const isAudioLoading = currentItem.isAudioLoading?.[idx];
+                                                        const audioData = currentItem.generatedAudios?.[idx];
+
+                                                        return (
+                                                        <div key={idx} className="p-3 bg-gray-50 rounded-lg border border-gray-100 space-y-2">
+                                                            <div className="flex justify-between items-center">
+                                                                <span className="text-[10px] font-bold uppercase text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                                                                    {VOICEOVER_LABELS[idx] || `Kịch bản ${idx + 1}`}
+                                                                </span>
+                                                                <button onClick={() => copyToClipboard(script, scriptId)} className="text-gray-400 hover:text-indigo-600">
+                                                                    {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                                                                </button>
+                                                            </div>
+                                                            <textarea
+                                                                value={script}
+                                                                onChange={(e) => handleScriptChange(idx, e.target.value)}
+                                                                className="w-full text-xs text-gray-700 bg-white p-2 rounded border border-gray-200 h-16 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none"
+                                                            />
+                                                            <div className="flex items-center gap-2 pt-1">
+                                                                {!audioData ? (
+                                                                    <button 
+                                                                        onClick={() => handleGenerateAudio(idx, script)}
+                                                                        disabled={isAudioLoading}
+                                                                        className="flex-1 py-1.5 bg-white border border-gray-300 hover:border-indigo-400 text-gray-700 rounded text-xs font-semibold shadow-sm flex items-center justify-center gap-1 transition-all"
+                                                                    >
+                                                                        {isAudioLoading ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                                                                        {isAudioLoading ? 'Đang tạo...' : 'Tạo giọng đọc'}
+                                                                    </button>
+                                                                ) : (
+                                                                    <div className="flex-1 flex flex-col gap-1">
+                                                                        <audio controls src={audioData} className="w-full h-6" />
+                                                                        <a href={audioData} download="audio.mp3" className="text-[10px] text-center text-blue-500 hover:underline">Tải MP3</a>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )})
+                                                ) : <span className="text-xs text-red-400">Lỗi hiển thị.</span>}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Actions Footer */}
+                        <div className="grid grid-cols-2 gap-3 mt-auto pt-2">
+                            <button 
+                                onClick={() => handleGenerate(true)}
+                                disabled={state.isGenerating}
+                                className={`
+                                flex items-center justify-center gap-2 py-3 rounded-xl font-semibold border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-all text-sm
+                                ${state.isGenerating ? 'opacity-70' : ''}
+                                `}
+                            >
+                                {state.isGenerating ? <RefreshCw size={16} className="animate-spin" /> : <Plus size={16} />}
+                                {state.isGenerating ? 'Đang tạo...' : 'Tạo thêm'}
+                            </button>
+
+                            <button 
+                                onClick={handleDownload}
+                                className="flex items-center justify-center gap-2 bg-gray-800 text-white py-3 rounded-xl font-semibold hover:bg-gray-900 transition-colors shadow-sm text-sm"
+                            >
+                                <Download size={16} />
+                                Tải ảnh
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                        <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                            <Sparkles size={24} className="text-gray-300" />
+                        </div>
+                        <p className="font-medium text-sm">Kết quả sẽ hiện ở đây</p>
+                    </div>
+                )}
+            </div>
+            {/* END RIGHT COLUMN */}
+
         </div>
+        /* 2-COLUMN LAYOUT END */
       )}
+
+      {/* Global Modal for Background Editor */}
+      <ImagePreviewModal 
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        imageUrl={previewUrl}
+      />
     </div>
   );
 };

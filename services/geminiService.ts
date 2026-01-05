@@ -17,6 +17,23 @@ const getApiKey = (): string => {
   return key;
 };
 
+// --- MIME TYPE HELPER (ROBUST) ---
+const getMimeType = (file: File): string => {
+  // 1. Trust browser if available and valid
+  if (file && file.type) return file.type;
+  
+  // 2. Fallback to filename extension
+  if (file && file.name) {
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+      if (name.endsWith('.webp')) return 'image/webp';
+      if (name.endsWith('.png')) return 'image/png';
+  }
+  
+  // 3. Ultimate Fallback (Gemini handles PNG/JPEG leniency well)
+  return 'image/png';
+};
+
 // --- NEW: VALIDATE API KEY ---
 export const validateApiKey = async (apiKey: string): Promise<boolean> => {
   try {
@@ -111,7 +128,7 @@ export const generateTryOnImage = async (
         { text: "ẢNH 1 (SẢN PHẨM MỚI):" },
         { inlineData: { mimeType: "image/png", data: isolatedProductBase64 } },
         { text: "ẢNH 2 (NGƯỜI MẪU GỐC):" },
-        { inlineData: { mimeType: modelImage.file.type, data: modelImage.base64 } },
+        { inlineData: { mimeType: getMimeType(modelImage.file), data: modelImage.base64 } },
         { text: promptText },
       ],
     };
@@ -224,7 +241,7 @@ export const changeBackground = async (
         Lưu ý: Giữ nguyên khuôn mặt của người mẫu tuyệt đối không thay đổi khuôn mặt người mẫu
       `;
       parts.push({ text: "ẢNH NỀN MỚI:" });
-      parts.push({ inlineData: { mimeType: backgroundImage.file.type, data: backgroundImage.base64 } });
+      parts.push({ inlineData: { mimeType: getMimeType(backgroundImage.file), data: backgroundImage.base64 } });
     }
     
     parts.push({ text: finalPrompt });
