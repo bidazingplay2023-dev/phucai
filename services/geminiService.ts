@@ -278,44 +278,41 @@ export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoP
     const prompt = `
     Phân tích kỹ dữ liệu thị giác của bức ảnh để thực hiện 2 nhiệm vụ sau:
 
-    NHIỆM VỤ 1: Viết 5 Video Prompts (Image-to-Video)
-    - YÊU CẦU: Tạo 5 prompt Tiếng Anh mô tả hành động người mẫu.
-    - CÁC QUY TẮC BẮT BUỘC (CONSTRAINTS):
-      1. KHÔNG ZOOM (NO ZOOM): Tuyệt đối cấm các từ khóa "zoom in", "close up", "detail shot".
-      2. GIỮ KHUNG HÌNH (FRAMING): Bắt buộc dùng "Medium shot" (Trung cảnh) hoặc "Full body shot" (Toàn cảnh) ở đầu mỗi prompt để giữ nguyên kết cấu sản phẩm.
-      3. ĐIỆN THOẠI:
-        - Nếu ảnh có cầm điện thoại -> Dùng "Mirror selfie", "holding phone".
-        - Nếu ảnh KHÔNG cầm điện thoại -> Dùng "POV looking at camera", "posing for camera".
-    - ĐẦU RA (5 Options - Tiếng Anh):
-      1. Full Fit Reveal (Toàn cảnh/Trung cảnh: Đứng yên hoặc lùi nhẹ để thấy toàn bộ trang phục).
-      2. Side Profile (Trung cảnh: Xoay nhẹ người khoe góc nghiêng).
-      3. Gentle Sway (Trung cảnh: Lắc lư nhẹ người tại chỗ, không thay đổi góc quay).
-      4. Subtle Pose (Trung cảnh: Đặt tay nhẹ lên eo hoặc vuốt tóc, chuyển động tay biên độ nhỏ).
-      5. Static Confidence (Toàn cảnh: Đứng tạo dáng tĩnh, tập trung vào thần thái).
-
-    NHIỆM VỤ 2: Viết Kịch bản Voiceover Tiếng Việt
-    - YÊU CẦU: Viết 2 kịch bản (35s) bán hàng, tuyệt đối không dùng tiếng Anh.
-    - PHONG CÁCH VIẾT (NATURAL FLOW):
-      + Sử dụng ngữ pháp văn nói tự nhiên, trôi chảy.
-      + Ngắt nghỉ bằng dấu câu chuẩn (dấu chấm, dấu phẩy) hợp lý để tạo cảm xúc liền mạch, tránh ngắt câu vụn vặt.
-    - QUY TẮC AN TOÀN CHẤT LIỆU:
-      + Không bịa tên chất liệu (Cotton, Lụa, Đũi...).
-      + Chỉ tả cảm giác (Mát, nhẹ, đứng form, mềm).
-    - QUY TRÌNH XÁC ĐỊNH NỘI DUNG (CONTEXT AWARE):
-      1. Xác định Style để chọn từ vựng:
-       - Dễ thương -> Dùng: "Xinh xỉu", "hack tuổi", "cưng", "ngọt ngào".
-       - Sexy/Cá tính -> Dùng: "Cháy phố", "bén", "nét căng", "cuốn", "nhức nách".
-       - Sang trọng -> Dùng: "Chanh sả", "khí chất", "tôn dáng", "đỉnh", "sang xịn".
-      2. Xác định Dáng áo để chọn vấn đề:
-        - Đồ Rộng -> Nói về: Che khuyết điểm, thoải mái.
-        - Đồ Ôm/Sexy -> Nói về: Tôn dáng, nổi bật.
-        - Đồ Basic -> Nói về: Tiện lợi, dễ phối.
-    - CẤU TRÚC KỊCH BẢN:
-      + Kịch bản 1 (Storytelling): Nêu vấn đề (dựa trên dáng áo) -> Đưa sản phẩm làm giải pháp.
-      + Kịch bản 2 (FOMO): Nhấn mạnh độ hot, giá tốt, kêu gọi mua ngay.
+    NHIỆM VỤ 1: Viết 5 Video Prompts (Image-to-Video) - CHẾ ĐỘ "IDLE MOTION"
+    - MỤC TIÊU: Tạo video "Living Photo" (Ảnh động). Người mẫu đứng yên, giữ nguyên khung hình gốc 100%.
+    - QUY TẮC LOGIC (LOGIC GATE):
+      1. XÁC ĐỊNH CAMERA (BẮT BUỘC):
+        - Nếu ảnh Mirror Selfie (Cầm điện thoại) -> Dùng cụm từ: "Handheld static camera, mirror selfie".
+        - Nếu ảnh Chụp thường (Không cầm điện thoại) -> Dùng cụm từ: "Tripod static camera, POV looking at camera".
+      2. XÁC ĐỊNH NEO CƠ THỂ (BODY ANCHOR):
+        - Nếu ảnh Toàn thân -> Dùng: "Feet glued to the floor" (Chân dính sàn).
+        - Nếu ảnh Bán thân -> Dùng: "Torso fixed in place" (Thân trên cố định).
+    - 5 OUTPUTS (Tiếng Anh - Bắt đầu mỗi prompt bằng cụm từ Camera đã xác định ở trên):
+      1. The Breathing Pose (Start with determined Camera phrase. Body Anchor applied. Model stands absolutely still. Only natural breathing and subtle eye blinking visible. Maintains original framing).
+      2. The Tiny Tilt (Start with determined Camera phrase. Body Anchor applied. Model stands in place. Slowly tilts head 5 degrees to the side, looking cute/cool. No body movement).
+      3. Hair Tuck Idle (Start with determined Camera phrase. Body Anchor applied. Model remains stationary. Uses free hand to gently tuck hair behind ear or smooths hair. No sudden moves).
+      4. Hip Shift Minimal (Start with determined Camera phrase. Body Anchor applied. Very subtle weight shift on hips without lifting feet/moving torso. A relaxed, waiting pose).
+      5. Interaction Check (Start with determined Camera phrase. Body Anchor applied. Model stands still. Glances down at the center of their outfit for 1 second, then looks up and smiles softly).
+    NHIỆM VỤ 2: Viết Kịch bản Voiceover Tiếng Việt - STYLE "BẠN THÂN GEN Z"
+    - YÊU CẦU: Viết 2 kịch bản (35s) giọng văn nói tự nhiên, đời thường.
+    - PHONG CÁCH (BESTIE TONE):
+      + Đóng vai bạn thân mách nhỏ, giọng điệu rủ rỉ, gần gũi.
+      + Dùng từ ngữ nói chuyện hàng ngày, không văn vở máy móc. Thêm các từ đệm tự nhiên như: "kiểu là", "thề luôn", "trộm vía", "ta nói...", "mấy bà coi nè".
+    - QUY TẮC AN TOÀN:
+    - LUẬT AN TOÀN CHẤT LIỆU: KHÔNG bịa tên chất liệu. CHỈ tả cảm giác.
+    + Không dùng Tiếng Anh.
+    - LUẬT CẤM TỪ LAI CĂNG:
+      + Cấm: "Set", "Mix", "Match", "Size", "Form", "Item".
+      + Thay bằng: "Bộ này", "phối", "cỡ", "dáng/phom", "món này".
+    - QUY TRÌNH NỘI DUNG:
+      + Style Dễ thương/Sexy/Sang trọng -> Chọn từ vựng tương ứng.
+      + Dáng Rộng/Ôm/Basic -> Chọn vấn đề tương ứng (Che bụng/Tôn dáng/Tiện lợi).
+    - CẤU TRÚC:
+      + Kịch bản 1 (Tâm sự): Kể về việc tìm ra món đồ này như một sự tình cờ thú vị, chia sẻ cảm giác thật khi mặc.
+      + Kịch bản 2 (Rủ rê): Kêu gọi bạn bè mua chung để đi chơi, nhấn mạnh độ xinh xẻo của đồ.
     - ĐỊNH DẠNG ĐẦU RA (JSON BẮT BUỘC):
     {
-      "videoPrompts": ["Medium shot/Full body shot of..."],
+      "videoPrompts": ["Static tripod camera, model stands in place..."],
       "voiceoverScripts": ["Lời thoại 1...", "Lời thoại 2..."]
     }
     `;
