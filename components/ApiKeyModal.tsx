@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { Key, Save, ExternalLink, Eye, EyeOff, AlertTriangle, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Key, Save, ExternalLink, Eye, EyeOff, AlertTriangle, Loader2, Trash2 } from 'lucide-react';
 import { validateApiKey } from '../services/geminiService';
 
 interface ApiKeyModalProps {
@@ -14,6 +14,9 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
   const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
+  
+  // Ref để focus lại input sau khi xóa
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     // Load key from storage when modal opens
@@ -62,6 +65,14 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
     }
   };
 
+  const handleResetKey = () => {
+    setApiKey('');
+    setError(null);
+    // Yêu cầu: Xóa luôn trong bộ nhớ
+    localStorage.removeItem('GOOGLE_API_KEY');
+    inputRef.current?.focus();
+  };
+
   if (!isOpen && !forceOpen) return null;
 
   return (
@@ -95,6 +106,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
             
             <div className="relative">
               <input
+                ref={inputRef}
                 type={showKey ? "text" : "password"}
                 value={apiKey}
                 onChange={(e) => {
@@ -103,16 +115,33 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, force
                 }}
                 disabled={isValidating}
                 placeholder="AIzaSy..."
-                className="w-full pl-4 pr-10 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all disabled:bg-gray-100 disabled:text-gray-500"
+                // Tăng padding right (pr-20) để tránh text bị che bởi 2 icon
+                className="w-full pl-4 pr-20 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all disabled:bg-gray-100 disabled:text-gray-500"
               />
-              <button
-                type="button"
-                onClick={() => setShowKey(!showKey)}
-                disabled={isValidating}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 disabled:opacity-50"
-              >
-                {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+              
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                {/* Nút Thùng rác (Reset): Chỉ hiện khi có text và không đang loading */}
+                {apiKey && !isValidating && (
+                  <button
+                    type="button"
+                    onClick={handleResetKey}
+                    className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                    title="Xóa Key & Bộ nhớ"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
+
+                {/* Nút Ẩn/Hiện Key */}
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  disabled={isValidating}
+                  className="text-gray-400 hover:text-gray-600 disabled:opacity-50 p-1"
+                >
+                  {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
             
             {error && (
