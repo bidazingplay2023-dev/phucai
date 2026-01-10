@@ -1,109 +1,134 @@
-import { ProcessedImage, GenerationState, AppConfig, AppStep, BackgroundState } from '../types';
+import { ProcessedImage } from '../types';
 
-const DB_NAME = 'FashionAI_DB';
-const STORE_NAME = 'app_state';
+// --- CONFIGURATION ---
+const DB_NAME = 'FashionAI_Database';
 const DB_VERSION = 1;
+const STORE_NAME = 'app_sessions';
 
-// Keys for different parts of the app
 export const KEYS = {
-  APP_SESSION: 'main_session_v1',
-  BG_EDITOR_SESSION: 'bg_editor_session_v1'
+  APP_SESSION: 'app_session_v1',
+  BG_EDITOR_SESSION: 'bg_editor_v1'
 };
 
-const initDB = (): Promise<IDBDatabase> => {
+// --- INDEXED DB HELPER (Core Logic) ---
+// Opens (or creates) the database asynchronously
+const openDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
+
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
       }
     };
+
+    request.onsuccess = (event) => {
+      resolve((event.target as IDBOpenDBRequest).result);
+    };
+
+    request.onerror = (event) => {
+      reject(`IndexedDB error: ${(event.target as IDBOpenDBRequest).error}`);
+    };
   });
 };
 
-export const saveToDB = async (key: string, value: any) => {
+// --- PUBLIC API (Compatible with App.tsx) ---
+
+// 1. Save Data (Async, Non-blocking)
+export const saveToDB = async (key: string, data: any): Promise<void> => {
   try {
-    const db = await initDB();
-    return new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction([STORE_NAME], 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
-      // We strip File objects because they don't persist well in all browsers/contexts
-      // We will rely on base64 and mimeType to reconstruct them
-      const request = store.put(value, key);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.put(data, key);
+    
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
     });
-  } catch (e) {
-    console.error("Save to DB failed", e);
+  } catch (error) {
+    console.error("Save to DB failed:", error);
   }
 };
 
-export const loadFromDB = async (key: string) => {
+// 2. Load Data (Async)
+export const loadFromDB = async (key: string): Promise<any> => {
   try {
-    const db = await initDB();
-    return new Promise<any>((resolve, reject) => {
-      const transaction = db.transaction([STORE_NAME], 'readonly');
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(key);
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.get(key);
+
+    return new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-  } catch (e) {
-    console.error("Load from DB failed", e);
+  } catch (error) {
+    console.error("Load from DB failed:", error);
     return null;
   }
 };
 
-export const clearKeyFromDB = async (key: string) => {
-    try {
-        const db = await initDB();
-        return new Promise<void>((resolve, reject) => {
-            const transaction = db.transaction([STORE_NAME], 'readwrite');
-            const store = transaction.objectStore(STORE_NAME);
-            const request = store.delete(key);
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
-        });
-    } catch (e) {
-        console.error("Clear DB key failed", e);
-    }
+// 3. Clear Data
+export const clearKeyFromDB = async (key: string): Promise<void> => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.delete(key);
+    
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (error) {
+    console.error("Clear DB key failed:", error);
+  }
 };
 
-// Helper to reconstruct ProcessedImage from saved state (which lacks the File object)
-export const reconstructProcessedImage = (saved: any): ProcessedImage | null => {
-  if (!saved || !saved.base64) return null;
+// --- HELPER FUNCTIONS FOR IMAGES ---
+
+// Prepare image for storage: Keep High-Res Base64
+export const prepareImageForStorage = (image: ProcessedImage | null) => {
+  if (!image) return null;
+  return {
+    base64: image.base64,
+    name: image.file.name,
+    type: image.file.type,
+    lastModified: image.file.lastModified
+  };
+};
+
+// Reconstruct image from DB: Create new Blob & URL
+export const reconstructProcessedImage = (savedImage: any): ProcessedImage | null => {
+  if (!savedImage) return null;
   
-  // Re-create a blob/file-like object for compatibility
-  // Note: We don't strictly need the binary File if we have base64 for display/API
-  // But we mock the File interface so types.ts is happy
-  const mimeType = saved.mimeType || 'image/png';
-  const mockFile = {
-    name: saved.fileName || 'restored-image.png',
-    type: mimeType,
-    lastModified: Date.now(),
-    size: Math.round((saved.base64.length * 3) / 4), // Approximate size
-    slice: () => new Blob(),
-    text: () => Promise.resolve(""),
-    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-    stream: () => new ReadableStream()
-  } as unknown as File;
+  try {
+    // Convert Base64 back to Blob/File
+    const byteString = atob(savedImage.base64);
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    
+    const type = savedImage.type || 'image/png';
+    const blob = new Blob([ab], { type: type });
+    const file = new File([blob], savedImage.name || 'restored_image.png', {
+      type: type,
+      lastModified: savedImage.lastModified || Date.now()
+    });
 
-  return {
-    base64: saved.base64,
-    previewUrl: `data:${mimeType};base64,${saved.base64}`,
-    file: mockFile
-  };
-};
+    const previewUrl = URL.createObjectURL(file);
 
-// Helper to prepare ProcessedImage for storage (strip File object)
-export const prepareImageForStorage = (img: ProcessedImage | null) => {
-  if (!img) return null;
-  return {
-    base64: img.base64,
-    mimeType: img.file.type,
-    fileName: img.file.name
-  };
+    return {
+      file: file,
+      base64: savedImage.base64, // Keep original high-quality base64
+      previewUrl: previewUrl
+    };
+  } catch (e) {
+    console.error("Error reconstructing image:", e);
+    return null;
+  }
 };

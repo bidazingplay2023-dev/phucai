@@ -1,5 +1,4 @@
 
-
 export interface ProcessedImage {
   file: File;
   previewUrl: string;
@@ -17,6 +16,9 @@ export interface AppConfig {
 }
 
 export type AppStep = 'TRY_ON' | 'BACKGROUND_EDIT';
+
+// New Type for Product Isolation Mode
+export type GarmentType = 'TOP' | 'BOTTOM' | 'FULL';
 
 // New interface to couple the image with its specific video prompts
 export interface GeneratedBackground {

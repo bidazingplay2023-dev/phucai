@@ -7,8 +7,8 @@ import { ApiKeyModal } from './components/ApiKeyModal';
 import { ImagePreviewModal } from './components/ImagePreviewModal';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
 import { saveToDB, loadFromDB, clearKeyFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage } from './services/storage';
-import { ProcessedImage, GenerationState, AppConfig, AppStep } from './types';
-import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, Key, RotateCcw, XCircle, CheckCircle2, Zap, ChevronDown, ChevronUp, Maximize2 } from 'lucide-react';
+import { ProcessedImage, GenerationState, AppConfig, AppStep, GarmentType } from './types';
+import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, Key, RotateCcw, XCircle, CheckCircle2, Zap, ChevronDown, ChevronUp, Maximize2, Download } from 'lucide-react';
 
 const App: React.FC = () => {
   // Loading State for Restoration
@@ -28,6 +28,7 @@ const App: React.FC = () => {
   const [productImage, setProductImage] = useState<ProcessedImage | null>(null);
   const [isolatedProduct, setIsolatedProduct] = useState<string | null>(null); 
   const [isIsolating, setIsIsolating] = useState(false);
+  const [garmentType, setGarmentType] = useState<GarmentType>('FULL'); // New State for Garment Type
 
   const [modelImage, setModelImage] = useState<ProcessedImage | null>(null);
   const [config, setConfig] = useState<AppConfig>({ enableMannequin: false });
@@ -69,6 +70,11 @@ const App: React.FC = () => {
             setProductImage(reconstructProcessedImage(savedData.productImage));
           }
           
+          // Restore Garment Type
+          if (savedData.garmentType) {
+            setGarmentType(savedData.garmentType);
+          }
+          
           if (savedData.isolatedProduct) {
             setIsolatedProduct(savedData.isolatedProduct);
             // Accordion Logic: If Step 1 is done, close it and open Step 2
@@ -108,12 +114,12 @@ const App: React.FC = () => {
 
   // Helper to get current state for saving
   const stateRef = useRef({
-     activeTab, productImage, isolatedProduct, modelImage, config, tryOnState, step2BaseImage
+     activeTab, productImage, isolatedProduct, modelImage, config, tryOnState, step2BaseImage, garmentType
   });
   
   useEffect(() => {
-      stateRef.current = { activeTab, productImage, isolatedProduct, modelImage, config, tryOnState, step2BaseImage };
-  }, [activeTab, productImage, isolatedProduct, modelImage, config, tryOnState, step2BaseImage]);
+      stateRef.current = { activeTab, productImage, isolatedProduct, modelImage, config, tryOnState, step2BaseImage, garmentType };
+  }, [activeTab, productImage, isolatedProduct, modelImage, config, tryOnState, step2BaseImage, garmentType]);
 
   const performSave = () => {
       if (isRestoring) return;
@@ -126,6 +132,7 @@ const App: React.FC = () => {
         config: current.config,
         tryOnState: { results: current.tryOnState.results },
         step2BaseImage: current.step2BaseImage,
+        garmentType: current.garmentType, // Save garment type
         timestamp: Date.now()
       };
       saveToDB(KEYS.APP_SESSION, sessionData);
@@ -144,7 +151,7 @@ const App: React.FC = () => {
     }, 1000); // Save after 1 second of inactivity
 
     return () => clearTimeout(saveTimeoutRef.current);
-  }, [activeTab, productImage, isolatedProduct, modelImage, config, tryOnState.results, step2BaseImage, isRestoring]);
+  }, [activeTab, productImage, isolatedProduct, modelImage, config, tryOnState.results, step2BaseImage, garmentType, isRestoring]);
 
   // 3. FORCE SAVE on Visibility Change (Tab Switch/Mobile Home Screen)
   useEffect(() => {
@@ -174,7 +181,8 @@ const App: React.FC = () => {
     setIsIsolating(true);
     setTryOnState(prev => ({ ...prev, error: null }));
     try {
-      const result = await isolateProductImage(productImage.base64);
+      // Pass the selected garmentType to the service
+      const result = await isolateProductImage(productImage.base64, garmentType);
       setIsolatedProduct(result);
       // Auto Advance Accordion: Close 1, Open 2
       setStep1Open(false);
@@ -249,6 +257,7 @@ const App: React.FC = () => {
         setModelImage(null);
         setTryOnState({ isLoading: false, results: [], error: null });
         setStep2BaseImage(null);
+        setGarmentType('FULL');
         setActiveTab('TRY_ON');
         setIsResetConfirming(false);
         setStep1Open(true);
@@ -456,6 +465,45 @@ const App: React.FC = () => {
                                             setIsolatedProduct(null);
                                         }}
                                     />
+                                    
+                                    {/* Garment Type Selector */}
+                                    {productImage && (
+                                      <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                                        <label className="text-xs font-semibold text-gray-500 mb-2 block uppercase tracking-wider">Chọn loại trang phục cần lấy:</label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                          <button
+                                            onClick={() => setGarmentType('TOP')}
+                                            className={`py-2 px-1 rounded-lg text-xs font-bold border transition-all ${
+                                              garmentType === 'TOP'
+                                                ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-1 ring-indigo-200'
+                                                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                                            }`}
+                                          >
+                                            Chỉ lấy Áo
+                                          </button>
+                                          <button
+                                            onClick={() => setGarmentType('BOTTOM')}
+                                            className={`py-2 px-1 rounded-lg text-xs font-bold border transition-all ${
+                                              garmentType === 'BOTTOM'
+                                                ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-1 ring-indigo-200'
+                                                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                                            }`}
+                                          >
+                                            Chỉ Quần/Váy
+                                          </button>
+                                          <button
+                                            onClick={() => setGarmentType('FULL')}
+                                            className={`py-2 px-1 rounded-lg text-xs font-bold border transition-all ${
+                                              garmentType === 'FULL'
+                                                ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-1 ring-indigo-200'
+                                                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                                            }`}
+                                          >
+                                            Lấy Cả Bộ
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {/* Isolation Controls */}
                                     {productImage && (
@@ -470,28 +518,50 @@ const App: React.FC = () => {
                                                     {isIsolating ? 'Đang tách nền...' : 'Tách nền ngay'}
                                                 </button>
                                             ) : (
-                                                <div 
-                                                    className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl cursor-pointer hover:bg-green-100 transition-colors group"
-                                                    onClick={() => setGlobalPreviewUrl(`data:image/png;base64,${isolatedProduct}`)}
-                                                >
-                                                    <div className="w-12 h-12 bg-white rounded-lg border border-green-100 p-1 shrink-0 relative group-hover:scale-105 transition-transform">
-                                                        <img src={`data:image/png;base64,${isolatedProduct}`} className="w-full h-full object-contain" alt="Isolated" />
-                                                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/10 rounded-lg">
-                                                            <Maximize2 size={16} className="text-white drop-shadow-md" />
+                                                <div className="flex items-center justify-between p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl group transition-colors hover:bg-emerald-50">
+                                                    {/* Left: Info */}
+                                                    <div 
+                                                        className="flex items-center gap-4 cursor-pointer"
+                                                        onClick={() => setGlobalPreviewUrl(`data:image/png;base64,${isolatedProduct}`)}
+                                                    >
+                                                        <div className="w-14 h-14 bg-white rounded-lg border border-emerald-100 p-1 relative shadow-sm overflow-hidden flex-shrink-0">
+                                                            <img src={`data:image/png;base64,${isolatedProduct}`} className="w-full h-full object-contain" alt="Isolated" />
+                                                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/10">
+                                                                <Maximize2 size={16} className="text-white drop-shadow-md" />
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <h4 className="text-sm font-bold text-emerald-900 flex items-center gap-1.5">
+                                                                <CheckCircle2 size={16} className="text-emerald-600" />
+                                                                Đã tách nền
+                                                            </h4>
+                                                            <p className="text-xs text-emerald-600/80 font-medium mt-0.5">Sẵn sàng ghép mẫu</p>
                                                         </div>
                                                     </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className="text-sm font-bold text-green-800 flex items-center gap-1">
-                                                            <CheckCircle2 size={14} /> Đã tách nền
-                                                        </p>
+
+                                                    {/* Right: Actions Buttons */}
+                                                    <div className="flex items-center gap-2 pl-2">
+                                                        <button 
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleIsolateProduct();
+                                                            }}
+                                                            disabled={isIsolating}
+                                                            title="Làm lại (Tách nền)"
+                                                            className="p-2.5 bg-white text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-100 hover:border-emerald-300 transition-all shadow-sm active:scale-95"
+                                                        >
+                                                            {isIsolating ? <Loader2 size={18} className="animate-spin" /> : <RotateCcw size={18} />}
+                                                        </button>
+                                                        
                                                         <button 
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 handleDownloadIsolated();
                                                             }}
-                                                            className="text-xs text-green-600 underline hover:text-green-800 truncate"
+                                                            title="Tải ảnh về"
+                                                            className="p-2.5 bg-white text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-100 hover:border-emerald-300 transition-all shadow-sm active:scale-95"
                                                         >
-                                                            Tải ảnh tách nền
+                                                            <Download size={18} />
                                                         </button>
                                                     </div>
                                                 </div>

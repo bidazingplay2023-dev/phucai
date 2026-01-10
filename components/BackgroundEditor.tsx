@@ -822,7 +822,13 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                                                 ) : (
                                                                     <div className="flex-1 flex flex-col gap-1">
                                                                         <audio controls src={audioData} className="w-full h-6" />
-                                                                        <a href={audioData} download="audio.mp3" className="text-[10px] text-center text-blue-500 hover:underline">Tải MP3</a>
+                                                                        <a 
+                                                                            href={`https://apiproxy.coha.workers.dev/download?url=${encodeURIComponent(audioData)}`} 
+                                                                            download={`voiceover-${idx + 1}.mp3`}
+                                                                            className="text-[10px] text-center text-blue-500 hover:underline"
+                                                                        >
+                                                                            Tải MP3
+                                                                        </a>
                                                                     </div>
                                                                 )}
                                                             </div>

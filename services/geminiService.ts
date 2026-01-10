@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { AppConfig, ProcessedImage } from "../types";
+import { AppConfig, ProcessedImage, GarmentType } from "../types";
 import { blobToBase64 } from "./utils";
 
 // REVERT: Back to Gemini 2.5 Flash Image as requested
@@ -50,20 +50,51 @@ export const validateApiKey = async (apiKey: string): Promise<boolean> => {
   }
 };
 
-// GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm
-export const isolateProductImage = async (productImageBase64: string): Promise<string> => {
+// GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm (GHOST MANNEQUIN)
+export const isolateProductImage = async (productImageBase64: string, garmentType: GarmentType = 'FULL'): Promise<string> => {
   try {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
     
+    // STRICT GHOST MANNEQUIN PROMPT LOGIC
+    let specificInstruction = "";
+    
+    switch (garmentType) {
+      case 'TOP':
+        specificInstruction = `
+        - EXTRACT ONLY THE UPPER GARMENT (Shirt, Jacket, Top, Coat).
+        - CUT/REMOVE completely: The Head, Neck, Hands, Arms (skin), and Lower Body (Pants/Skirts/Legs).
+        - CROP: Crop tightly around the bottom hem of the shirt/top.
+        - INPAINT: Reconstruct the inner neck label area and the bottom hem to make it look like a hollow ghost mannequin.
+        `;
+        break;
+      case 'BOTTOM':
+        specificInstruction = `
+        - EXTRACT ONLY THE LOWER GARMENT (Pants, Skirt, Shorts, Jeans).
+        - CUT/REMOVE completely: The Upper Body (Shirts/Tops), Head, Arms, and Feet/Shoes.
+        - CROP: Crop tightly around the waistline.
+        - INPAINT: Reconstruct the waistline area (inner waistband) to make it look like a hollow ghost mannequin.
+        `;
+        break;
+      case 'FULL':
+        specificInstruction = `
+        - EXTRACT THE FULL OUTFIT (Top + Bottom connection).
+        - CUT/REMOVE completely: Head, Face, Neck, Hands, Feet/Shoes, and any visible Skin.
+        - KEEP: The structural connection between the top and bottom garments.
+        - INPAINT: Reconstruct the neck opening and sleeve openings.
+        `;
+        break;
+    }
+
     const prompt = `
-      Nhiệm vụ: Chụp ảnh sản phẩm thương mại điện tử (E-commerce Product Photography).
-      
-      Yêu cầu:
-      1. Hãy tách chiếc quần/áo/váy trong ảnh này ra khỏi nền cũ.
-      2. Đặt nó lên một nền TRẮNG TINH KHIẾT (Pure White Background #FFFFFF).
-      3. Giữ nguyên chi tiết, màu sắc, nếp nhăn vải và ánh sáng thực tế của sản phẩm.
-      4. Loại bỏ móc treo, ma nơ canh hoặc người mẫu cũ (nếu có), chỉ giữ lại trang phục.
-      5. Căn giữa sản phẩm.
+      ROLE: Expert E-commerce Retoucher.
+      TASK: Create a professional "GHOST MANNEQUIN" (Invisible Mannequin) or "FLAT LAY" product image from the input.
+
+      STRICT EXECUTION RULES:
+      1. ${specificInstruction}
+      2. BACKGROUND: PURE WHITE (#FFFFFF).
+      3. CLEANUP: REMOVE ALL BODY PARTS. No skin, no hair, no faces, no hands, no fingers, no feet. The result must look like the clothes are floating or laid flat.
+      4. QUALITY: Maintain original texture, folds, lighting, and colors of the fabric. High resolution.
+      5. COMPOSITION: Center the garment on the canvas.
     `;
 
     const response = await ai.models.generateContent({
@@ -278,41 +309,37 @@ export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoP
     const prompt = `
     Phân tích kỹ dữ liệu thị giác của bức ảnh để thực hiện 2 nhiệm vụ sau:
 
-    NHIỆM VỤ 1: Viết 5 Video Prompts (Image-to-Video) - CHẾ ĐỘ "IDLE MOTION"
-    - MỤC TIÊU: Tạo video "Living Photo" (Ảnh động). Người mẫu đứng yên, giữ nguyên khung hình gốc 100%.
-    - QUY TẮC LOGIC (LOGIC GATE):
-      1. XÁC ĐỊNH CAMERA (BẮT BUỘC):
-        - Nếu ảnh Mirror Selfie (Cầm điện thoại) -> Dùng cụm từ: "Handheld static camera, mirror selfie".
-        - Nếu ảnh Chụp thường (Không cầm điện thoại) -> Dùng cụm từ: "Tripod static camera, POV looking at camera".
-      2. XÁC ĐỊNH NEO CƠ THỂ (BODY ANCHOR):
-        - Nếu ảnh Toàn thân -> Dùng: "Feet glued to the floor" (Chân dính sàn).
-        - Nếu ảnh Bán thân -> Dùng: "Torso fixed in place" (Thân trên cố định).
-    - 5 OUTPUTS (Tiếng Anh - Bắt đầu mỗi prompt bằng cụm từ Camera đã xác định ở trên):
-      1. The Breathing Pose (Start with determined Camera phrase. Body Anchor applied. Model stands absolutely still. Only natural breathing and subtle eye blinking visible. Maintains original framing).
-      2. The Tiny Tilt (Start with determined Camera phrase. Body Anchor applied. Model stands in place. Slowly tilts head 5 degrees to the side, looking cute/cool. No body movement).
-      3. Hair Tuck Idle (Start with determined Camera phrase. Body Anchor applied. Model remains stationary. Uses free hand to gently tuck hair behind ear or smooths hair. No sudden moves).
-      4. Hip Shift Minimal (Start with determined Camera phrase. Body Anchor applied. Very subtle weight shift on hips without lifting feet/moving torso. A relaxed, waiting pose).
-      5. Interaction Check (Start with determined Camera phrase. Body Anchor applied. Model stands still. Glances down at the center of their outfit for 1 second, then looks up and smiles softly).
-    NHIỆM VỤ 2: Viết Kịch bản Voiceover Tiếng Việt - STYLE "BẠN THÂN GEN Z"
-    - YÊU CẦU: Viết 2 kịch bản (35s) giọng văn nói tự nhiên, đời thường.
-    - PHONG CÁCH (BESTIE TONE):
-      + Đóng vai bạn thân mách nhỏ, giọng điệu rủ rỉ, gần gũi.
-      + Dùng từ ngữ nói chuyện hàng ngày, không văn vở máy móc. Thêm các từ đệm tự nhiên như: "kiểu là", "thề luôn", "trộm vía", "ta nói...", "mấy bà coi nè".
-    - QUY TẮC AN TOÀN:
-    - LUẬT AN TOÀN CHẤT LIỆU: KHÔNG bịa tên chất liệu. CHỈ tả cảm giác.
-    + Không dùng Tiếng Anh.
+    NHIỆM VỤ 1: Viết 5 Video Prompts (Image-to-Video) - CHẾ ĐỘ "CONTROLLED DRIFT" (TRÔI NHẸ)
+    - MỤC TIÊU: Tạo video có chuyển động tự nhiên, nhẹ nhàng như đang "thở", không đứng im như tượng nhưng cũng không di chuyển mạnh.
+    - TỪ KHÓA KIỂM SOÁT CHUYỂN ĐỘNG (SOFT LOCKS):
+      1. CAMERA: Sử dụng "Slow, floating camera movement" hoặc "Gentle handheld drift" (Tạo cảm giác máy quay cầm tay rất êm, trôi nhẹ).
+      2. NGƯỜI MẪU: Sử dụng "Subtle body sway" (Lắc lư cơ thể nhẹ) hoặc "Soft weight shift" (Dồn trọng tâm nhẹ).
+      3. GIỚI HẠN BIÊN ĐỘ: Luôn kèm từ khóa "Minimal movement", "Slow motion", "No sudden moves" để kìm hãm AI không làm quá đà.
+    - 4. LOGIC ĐIỆN THOẠI:
+        - Có cầm điện thoại -> Dùng "Mirror selfie", "looking at phone".
+        - Không cầm điện thoại -> Dùng "POV looking at camera".
+    - 5 OUTPUTS (Tiếng Anh - Mô tả chuyển động tinh tế):
+      1. The Gentle Float (Slow floating camera. Model sways body very slightly to the rhythm, looking confident. Minimal movement, keeping focus on the outfit).
+      2. Soft Hair Play (Gentle handheld drift. Model tilts head slowly and tucks hair behind ear. The movement is smooth and slow, not jerky).
+      3. The "Vibe" Check (Slow camera drift. Model shifts weight gently from one hip to the other, checking out their fit in the mirror/camera. Relaxed atmosphere).
+      4. Angle Shift (Floating camera moves slightly around the model (very small arc). Model turns head slowly to follow the camera. Controlled motion).
+      5. The Closer Look (Camera slowly drifts a bit closer (no zoom, just drift). Model looks down at their outfit then looks up and smiles. Smooth transition).
+    NHIỆM VỤ 2: Viết Kịch bản Voiceover Tiếng Việt (LOGIC THÔNG MINH + TỰ NHIÊN)
+    - YÊU CẦU: Viết 2 kịch bản (35s) bán hàng, tuyệt đối không dùng tiếng Anh.
+    - PHONG CÁCH: Văn nói tự nhiên (đời thường), ngắt nghỉ bằng dấu câu chuẩn.
     - LUẬT CẤM TỪ LAI CĂNG:
       + Cấm: "Set", "Mix", "Match", "Size", "Form", "Item".
       + Thay bằng: "Bộ này", "phối", "cỡ", "dáng/phom", "món này".
-    - QUY TRÌNH NỘI DUNG:
-      + Style Dễ thương/Sexy/Sang trọng -> Chọn từ vựng tương ứng.
-      + Dáng Rộng/Ôm/Basic -> Chọn vấn đề tương ứng (Che bụng/Tôn dáng/Tiện lợi).
+    - LUẬT AN TOÀN CHẤT LIỆU: KHÔNG bịa tên chất liệu. CHỈ tả cảm giác.
+    - LOGIC NỘI DUNG:
+      + Style (Dễ thương/Cá tính/Sang trọng) -> Chọn từ vựng.
+      + Dáng (Rộng/Ôm/Basic) -> Chọn nỗi đau (Che bụng/Khoe dáng/Tiện lợi).
     - CẤU TRÚC:
       + Kịch bản 1 (Tâm sự): Kể về việc tìm ra món đồ này như một sự tình cờ thú vị, chia sẻ cảm giác thật khi mặc.
       + Kịch bản 2 (Rủ rê): Kêu gọi bạn bè mua chung để đi chơi, nhấn mạnh độ xinh xẻo của đồ.
     - ĐỊNH DẠNG ĐẦU RA (JSON BẮT BUỘC):
     {
-      "videoPrompts": ["Static tripod camera, model stands in place..."],
+      "videoPrompts": ["Slow floating camera...", "Gentle handheld drift..."],
       "voiceoverScripts": ["Lời thoại 1...", "Lời thoại 2..."]
     }
     `;
