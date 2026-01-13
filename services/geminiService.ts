@@ -85,16 +85,19 @@ export const isolateProductImage = async (productImageBase64: string, garmentTyp
         break;
     }
 
+    // Thay đoạn prompt cũ bằng đoạn này để ép lấy nét tối đa
     const prompt = `
-      ROLE: Expert E-commerce Retoucher.
-      TASK: Create a professional "GHOST MANNEQUIN" (Invisible Mannequin) or "FLAT LAY" product image from the input.
-
+      TASK: Precise Garment Extraction (High-Fidelity).
+      INPUT: Raw product image.
+      
       STRICT EXECUTION RULES:
-      1. ${specificInstruction}
-      2. BACKGROUND: PURE WHITE (#FFFFFF).
-      3. CLEANUP: REMOVE ALL BODY PARTS. No skin, no hair, no faces, no hands, no fingers, no feet. The result must look like the clothes are floating or laid flat.
-      4. QUALITY: Maintain original texture, folds, lighting, and colors of the fabric. High resolution.
-      5. COMPOSITION: Center the garment on the canvas.
+      1. ACTION: ${specificInstruction}
+      2. PRESERVATION (CRITICAL): 
+         - Keep 100% original fabric texture, stitching, and folds. 
+         - DO NOT SMOOTH or DENOISE the fabric.
+         - Output in original resolution (Lossless).
+      3. BACKGROUND: Remove background completely. Replace with TRANSPARENT (Alpha Channel) or PURE WHITE (#FFFFFF).
+      4. COMPOSITION: Center the garment. Do not crop off any edges.
     `;
 
     const response = await ai.models.generateContent({
@@ -135,17 +138,35 @@ export const generateTryOnImage = async (
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
     let promptText = `
-    Nhiệm vụ: Virtual Try-On (Thử đồ ảo).
-    
-    Đầu vào:
-    - Ảnh 1: Ảnh trang phục đã được tách nền (Sản phẩm cần mặc).
-    - Ảnh 2: Ảnh người mẫu gốc.
+    Nhiệm vụ: Virtual Try-On & Auto-Harmonize (Thử đồ & Tự động cân bằng tổng thể).
 
-    Yêu cầu thực hiện:
-    1. Thay trang phục hiện tại của người mẫu trong Ảnh 2 bằng trang phục trong Ảnh 1.
-    2. QUAN TRỌNG: Giữ nguyên khuôn mặt, dáng đứng và bối cảnh của Ảnh 2. KHÔNG ĐƯỢC thay đổi khuôn mặt.
-    3. Trang phục mới phải ôm sát cơ thể người mẫu một cách tự nhiên (realistic fit).
-    4. Xử lý ánh sáng trên trang phục mới sao cho khớp với ánh sáng môi trường của Ảnh 2.
+Đầu vào: Ảnh 1 (Sản phẩm) + Ảnh 2 (Người mẫu).
+
+QUY TRÌNH XỬ LÝ:
+
+1. MẶC ĐỒ (TRY-ON):
+   - Mặc sản phẩm từ Ảnh 1 lên người mẫu Ảnh 2.
+   - Yêu cầu cốt lõi: Form dáng chuẩn, ánh sáng khớp môi trường.
+
+2. ĐÁNH GIÁ & XỬ LÝ PHỤ KIỆN (GIÀY DÉP/TÚI/TRANG SỨC):
+   - HÃY TỰ ĐẶT CÂU HỎI: "Phụ kiện hiện tại của người mẫu (Giày/Dép, Túi,...) có phù hợp (Matching) với bộ đồ mới mặc không?"
+
+   - TRƯỜNG HỢP A: ĐÃ PHÙ HỢP (Good Match)
+     => HÀNH ĐỘNG: GIỮ NGUYÊN ảnh gốc. Không chỉnh sửa gì thêm ở vùng chân/tay.
+     (Ví dụ: Đang đi giày Sneaker và mặc bộ đồ mới cũng style năng động -> Giữ nguyên).
+
+   - TRƯỜNG HỢP B: KHÔNG PHÙ HỢP (Style Clash/Mismatched)
+     => HÀNH ĐỘNG: THAY THẾ phụ kiện đó bằng món đồ khác phù hợp nhất với trang phục mới.
+     (Ví dụ: Đang đi giày thể thao hầm hố nhưng mặc váy lụa -> Thay ngay bằng giày cao gót/búp bê).
+
+3. LƯU Ý QUAN TRỌNG KHI THAY THẾ (CLEANUP):
+   - Nếu AI quyết định thay giày: Bắt buộc phải xử lý luôn phần TẤT (Socks). Nếu đổi sang giày hở chân/cao gót thì phải XÓA TẤT cũ đi.
+   - Nguyên tắc: "Thà không sửa, đã sửa là phải đồng bộ".
+
+4. BẢO TOÀN:
+   - Tuyệt đối giữ nguyên khuôn mặt và bối cảnh.
+
+KẾT QUẢ: Một bức ảnh hài hòa, nơi trang phục và phụ kiện ăn nhập với nhau (do AI tự đánh giá và quyết định).
     `;
 
     if (config.enableMannequin) {

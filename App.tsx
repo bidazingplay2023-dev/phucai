@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultDisplay } from './components/ResultDisplay';
@@ -8,7 +7,7 @@ import { ImagePreviewModal } from './components/ImagePreviewModal';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
 import { saveToDB, loadFromDB, clearKeyFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage } from './services/storage';
 import { ProcessedImage, GenerationState, AppConfig, AppStep, GarmentType } from './types';
-import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, Key, RotateCcw, XCircle, CheckCircle2, Zap, ChevronDown, ChevronUp, Maximize2, Download } from 'lucide-react';
+import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, Key, CheckCircle2, Zap, ChevronDown, ChevronUp, Maximize2, RotateCcw, Download, Trash2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Loading State for Restoration
@@ -23,6 +22,12 @@ const App: React.FC = () => {
 
   // Global Preview State (For Header Thumbnails)
   const [globalPreviewUrl, setGlobalPreviewUrl] = useState<string | null>(null);
+
+  // Reset Confirmation State
+  const [isResetConfirming, setIsResetConfirming] = useState(false);
+  
+  // App Reset Key (to force remounting of components)
+  const [appResetKey, setAppResetKey] = useState(0);
 
   // Step 1 Data
   const [productImage, setProductImage] = useState<ProcessedImage | null>(null);
@@ -40,16 +45,10 @@ const App: React.FC = () => {
   
   // Step 2 Data
   const [step2BaseImage, setStep2BaseImage] = useState<string | null>(null);
-
-  // Reset Confirmation State
-  const [isResetConfirming, setIsResetConfirming] = useState(false);
   
   // Api Key Modal State
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   
-  // Reset Key: Used to force re-mounting of components to clear internal state
-  const [resetKey, setResetKey] = useState(0);
-
   // --- PERSISTENCE LOGIC START ---
   
   // 1. Restore data on mount AND check API Key
@@ -164,16 +163,43 @@ const App: React.FC = () => {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isRestoring]);
 
-  // Auto hide reset confirmation after 3 seconds
-  useEffect(() => {
-    let timer: any;
-    if (isResetConfirming) {
-      timer = setTimeout(() => {
-        setIsResetConfirming(false);
-      }, 3000);
+  // FULL RESET FUNCTION (Soft Reset without Reload)
+  const handleFullReset = async () => {
+    if (!isResetConfirming) {
+        setIsResetConfirming(true);
+        // Auto reset confirmation state after 3 seconds
+        setTimeout(() => setIsResetConfirming(false), 3000);
+        return;
     }
-    return () => clearTimeout(timer);
-  }, [isResetConfirming]);
+
+    try {
+        // 1. Clear IndexedDB
+        await clearKeyFromDB(KEYS.APP_SESSION);
+        await clearKeyFromDB(KEYS.BG_EDITOR_SESSION);
+
+        // 2. Reset React State Manually (Soft Reset)
+        setActiveTab('TRY_ON');
+        setStep1Open(true);
+        setStep2Open(false);
+        setProductImage(null);
+        setIsolatedProduct(null);
+        setGarmentType('FULL');
+        setModelImage(null);
+        setConfig({ enableMannequin: false });
+        setTryOnState({ isLoading: false, results: [], error: null });
+        setStep2BaseImage(null);
+        setGlobalPreviewUrl(null);
+        
+        // 3. Force components to remount (clearing their internal states)
+        setAppResetKey(prev => prev + 1);
+
+        setIsResetConfirming(false);
+        
+    } catch (e) {
+        console.error("Reset failed", e);
+        alert("Lỗi khi reset ứng dụng. Vui lòng thử lại.");
+    }
+  };
 
   // Sub-step 1.1: Isolate Product
   const handleIsolateProduct = async () => {
@@ -240,32 +266,10 @@ const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Partial Reset
+  // Partial Reset (Only used inside components)
   const handlePartialReset = () => {
     setModelImage(null);
     setTryOnState({ isLoading: false, results: [], error: null });
-  };
-
-  // Full Reset
-  const handleFullReset = async () => {
-    if (isResetConfirming) {
-        await clearKeyFromDB(KEYS.APP_SESSION);
-        await clearKeyFromDB(KEYS.BG_EDITOR_SESSION);
-        
-        setProductImage(null);
-        setIsolatedProduct(null); 
-        setModelImage(null);
-        setTryOnState({ isLoading: false, results: [], error: null });
-        setStep2BaseImage(null);
-        setGarmentType('FULL');
-        setActiveTab('TRY_ON');
-        setIsResetConfirming(false);
-        setStep1Open(true);
-        setStep2Open(false);
-        setResetKey(prev => prev + 1);
-    } else {
-        setIsResetConfirming(true);
-    }
   };
 
   // --- MOBILE NAVIGATION COMPONENT ---
@@ -279,7 +283,7 @@ const App: React.FC = () => {
              <Shirt size={24} strokeWidth={activeTab === 'TRY_ON' ? 2.5 : 2} />
              <span className="text-[10px] font-semibold mt-1">Mặc thử</span>
           </button>
-          <div className="w-px h-8 bg-gray-200"></div>
+          <div className="w-px h-8 bg-gray-200 mx-2 hidden sm:block"></div>
           <button 
              onClick={() => setActiveTab('BACKGROUND_EDIT')}
              className={`flex flex-col items-center justify-center w-full h-full transition-colors ${activeTab === 'BACKGROUND_EDIT' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}
@@ -364,26 +368,26 @@ const App: React.FC = () => {
 
               <div className="h-6 w-px bg-gray-200 mx-2 hidden sm:block"></div>
 
+              {/* Reset Button */}
+              <button
+                onClick={handleFullReset}
+                title="Xóa dữ liệu & Làm mới"
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-200 border
+                 ${isResetConfirming 
+                    ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100 w-36 justify-center' 
+                    : 'bg-transparent text-gray-500 border-transparent hover:text-indigo-600 hover:bg-indigo-50 w-10 justify-center'
+                 }`}
+              >
+                {isResetConfirming ? <Trash2 size={18} /> : <RotateCcw size={20} />}
+                {isResetConfirming && <span className="text-xs font-bold whitespace-nowrap">Xác nhận xóa?</span>}
+              </button>
+
               <button
                 onClick={() => setIsKeyModalOpen(true)}
                 className="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                title="Cài đặt API Key"
               >
                 <Key size={20} />
-              </button>
-
-              <button 
-                onClick={handleFullReset}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-300 ${
-                    isResetConfirming 
-                    ? 'bg-red-50 text-red-600 ring-1 ring-red-200' 
-                    : 'text-gray-500 hover:text-red-600 hover:bg-red-50'
-                }`}
-              >
-                {isResetConfirming ? (
-                    <XCircle size={20} />
-                ) : (
-                    <RotateCcw size={20} />
-                )}
               </button>
           </div>
         </div>
@@ -700,7 +704,7 @@ const App: React.FC = () => {
         {/* TAB 2: BACKGROUND EDIT */}
         <div className={activeTab === 'BACKGROUND_EDIT' ? 'block animate-in fade-in duration-300' : 'hidden'}>
            <BackgroundEditor 
-            key={`bg-editor-${resetKey}`}
+            key={`bg-editor-${appResetKey}`}
             initialBaseImage={step2BaseImage}
           />
         </div>
