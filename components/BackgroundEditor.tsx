@@ -1,14 +1,14 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ProcessedImage, BackgroundState, GeneratedBackground } from '../types';
-import { suggestBackgrounds, changeBackground, generateVideoPrompt, generateEveraiSpeech } from '../services/geminiService';
-import { saveToDB, loadFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage } from '../services/storage';
+import { ProcessedImage, BackgroundState, GeneratedBackground, GeneratedImage } from '../types';
+import { suggestBackgrounds, changeBackground, generateVideoPrompt, generateEveraiSpeech, STYLE_PROMPTS } from '../services/geminiService';
+import { saveToDB, loadFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage, prepareBackgroundsForStorage, reconstructBackgrounds, reconstructGeneratedImage, prepareGeneratedImageForStorage } from '../services/storage';
 import { ImageUploader } from './ImageUploader';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { Sparkles, Lightbulb, Loader2, Download, Plus, Check, RefreshCw, Image, Type, Upload, Video, Copy, MonitorPlay, Mic, ChevronDown, ChevronRight, Play, FileText, Maximize2, CheckCircle2, ChevronUp } from 'lucide-react';
 
 interface BackgroundEditorProps {
-  initialBaseImage: string | null;
+  initialBaseImage: GeneratedImage | null;
 }
 
 type EditorMode = 'UPLOAD' | 'PROMPT' | 'KEEP';
@@ -19,6 +19,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     backgroundImage: null,
     textPrompt: '',
     aiSuggestions: [],
+    suggestionCache: {}, // Initialize empty cache
     isSuggesting: false,
     isGenerating: false,
     resultsUpload: [],
@@ -28,6 +29,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   });
 
   const [mode, setMode] = useState<EditorMode>('UPLOAD');
+  const [selectedStyle, setSelectedStyle] = useState("Retro (Home Studio)");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [isLoadingStorage, setIsLoadingStorage] = useState(true);
@@ -35,6 +37,10 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
   const [previewUrl, setPreviewUrl] = useState<string | null>(null); // For local preview
   
   const [openSection, setOpenSection] = useState<string | null>('video');
+
+  // Input fields for extra info
+  const [fabricInput, setFabricInput] = useState('');
+  const [detailInput, setDetailInput] = useState('');
 
   // Accordion State
   const [step1Open, setStep1Open] = useState(true);
@@ -65,6 +71,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
             backgroundImage: null,
             textPrompt: '',
             aiSuggestions: [],
+            suggestionCache: {},
             isSuggesting: false,
             isGenerating: false,
             resultsUpload: [],
@@ -85,7 +92,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
         resultsKeep: [],
         error: null
       }));
-      // Auto accordion logic handled in next effect
     }
   }, [initialBaseImage]);
 
@@ -100,25 +106,28 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
      }
   }, [state.selectedBaseImage]);
 
+  // RESTORE STATE
   useEffect(() => {
     const restore = async () => {
         try {
             const saved = await loadFromDB(KEYS.BG_EDITOR_SESSION);
             if (saved) {
-                const baseImg = initialBaseImage || saved.selectedBaseImage;
+                const baseImg = initialBaseImage || reconstructGeneratedImage(saved.selectedBaseImage);
                 
                 setState(prev => ({
                     ...prev,
                     selectedBaseImage: baseImg,
                     textPrompt: saved.textPrompt || '',
-                    resultsUpload: saved.resultsUpload || [],
-                    resultsPrompt: saved.resultsPrompt || [],
-                    resultsKeep: saved.resultsKeep || [],
+                    aiSuggestions: saved.aiSuggestions || [],
+                    suggestionCache: saved.suggestionCache || {}, // Restore Cache
+                    resultsUpload: reconstructBackgrounds(saved.resultsUpload),
+                    resultsPrompt: reconstructBackgrounds(saved.resultsPrompt),
+                    resultsKeep: reconstructBackgrounds(saved.resultsKeep),
                     backgroundImage: reconstructProcessedImage(saved.backgroundImage)
                 }));
                 if (saved.mode) setMode(saved.mode);
+                if (saved.selectedStyle) setSelectedStyle(saved.selectedStyle); // Restore selected style
                 
-                // Set initial accordion state based on restored data
                 if (baseImg) {
                     setStep1Open(false);
                     setStep2Open(true);
@@ -133,6 +142,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     restore();
   }, []); 
 
+  // SAVE STATE
   const saveTimeoutRef = useRef<any>(null);
   useEffect(() => {
     if (isLoadingStorage) return;
@@ -140,20 +150,23 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
         const dataToSave = {
-            selectedBaseImage: state.selectedBaseImage,
+            selectedBaseImage: prepareGeneratedImageForStorage(state.selectedBaseImage),
             textPrompt: state.textPrompt,
-            resultsUpload: state.resultsUpload,
-            resultsPrompt: state.resultsPrompt,
-            resultsKeep: state.resultsKeep,
+            aiSuggestions: state.aiSuggestions,
+            suggestionCache: state.suggestionCache, 
+            resultsUpload: prepareBackgroundsForStorage(state.resultsUpload),
+            resultsPrompt: prepareBackgroundsForStorage(state.resultsPrompt),
+            resultsKeep: prepareBackgroundsForStorage(state.resultsKeep),
             backgroundImage: prepareImageForStorage(state.backgroundImage),
             mode: mode,
+            selectedStyle: selectedStyle,
             timestamp: Date.now()
         };
         saveToDB(KEYS.BG_EDITOR_SESSION, dataToSave);
     }, 1000);
     
     return () => clearTimeout(saveTimeoutRef.current);
-  }, [state, mode, isLoadingStorage]);
+  }, [state, mode, selectedStyle, isLoadingStorage]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -168,12 +181,31 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     }
   }, [currentResultsLength]);
 
+  const handleStyleChange = (newStyle: string) => {
+    setSelectedStyle(newStyle);
+    const cached = state.suggestionCache?.[newStyle] || [];
+    setState(prev => ({ 
+        ...prev, 
+        aiSuggestions: cached, 
+        textPrompt: cached.length > 0 ? cached[0] : '' 
+    }));
+  };
+
   const handleSuggest = async () => {
     if (!state.selectedBaseImage) return;
     setState(prev => ({ ...prev, isSuggesting: true, error: null }));
     try {
-      const suggestions = await suggestBackgrounds(state.selectedBaseImage);
-      setState(prev => ({ ...prev, isSuggesting: false, aiSuggestions: suggestions }));
+      const suggestions = await suggestBackgrounds(state.selectedBaseImage.blob, selectedStyle);
+      
+      setState(prev => ({ 
+          ...prev, 
+          isSuggesting: false, 
+          aiSuggestions: suggestions,
+          suggestionCache: {
+              ...prev.suggestionCache,
+              [selectedStyle]: suggestions
+          }
+      }));
     } catch (err) {
       setState(prev => ({ ...prev, isSuggesting: false, error: "Không lấy được gợi ý." }));
     }
@@ -200,19 +232,20 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     setState(prev => ({ ...prev, isGenerating: true, error: null }));
     
     try {
-      let resultBase64 = '';
+      let resultImage: GeneratedImage;
 
       if (executionMode === 'KEEP') {
-         resultBase64 = state.selectedBaseImage;
+         resultImage = { blob: state.selectedBaseImage.blob, previewUrl: state.selectedBaseImage.previewUrl };
          await new Promise(resolve => setTimeout(resolve, 500));
       } else {
          const bgImageParam = executionMode === 'UPLOAD' ? state.backgroundImage : null;
          const promptParam = executionMode === 'PROMPT' ? state.textPrompt : '';
-         resultBase64 = await changeBackground(state.selectedBaseImage, promptParam, bgImageParam);
+         resultImage = await changeBackground(state.selectedBaseImage.blob, promptParam, bgImageParam);
       }
       
       const newResultItem: GeneratedBackground = {
-          base64: resultBase64,
+          blob: resultImage.blob,
+          previewUrl: resultImage.previewUrl,
           videoPrompts: [],
           voiceoverScripts: [],
           isVideoPromptLoading: false,
@@ -223,14 +256,14 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
       setState(prev => {
           const currentList = prev[targetKey] as GeneratedBackground[];
-          const updatedList = isRegenerate ? [newResultItem, ...currentList] : [newResultItem];
-          
+          const updatedList = [newResultItem, ...currentList];
           return { 
             ...prev, 
             isGenerating: false, 
             [targetKey]: updatedList
           };
       });
+      setStep2Open(false); // Collapse Step 2 on success
 
     } catch (err: any) {
       setState(prev => ({ ...prev, isGenerating: false, error: err.message }));
@@ -251,7 +284,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     });
 
     try {
-        const contentResult = await generateVideoPrompt(item.base64);
+        const contentResult = await generateVideoPrompt(item.blob, fabricInput, detailInput);
         
         setState(prev => {
             const list = [...(prev[targetKey] as GeneratedBackground[])];
@@ -281,11 +314,9 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
   const handleScriptChange = (scriptIndex: number, newText: string) => {
     const targetKey = getCurrentResultKey();
-    
     setState(prev => {
         const list = [...(prev[targetKey] as GeneratedBackground[])];
         const currentItem = { ...list[selectedIndex] };
-        
         if (currentItem && currentItem.voiceoverScripts) {
              const newScripts = [...currentItem.voiceoverScripts];
              newScripts[scriptIndex] = newText;
@@ -345,7 +376,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     const currentResult = currentList[selectedIndex];
     
     const link = document.createElement('a');
-    link.href = `data:image/png;base64,${currentResult.base64}`;
+    link.href = currentResult.previewUrl;
     link.download = `ai-bg-change-${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
@@ -358,52 +389,71 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
     setTimeout(() => setCopiedIndex(null), 1500);
   };
 
+  // Adapter for ImageUploader
   const handleBaseImageUpload = (img: ProcessedImage | null) => {
+    const converted: GeneratedImage | null = img ? { blob: img.file, previewUrl: img.previewUrl } : null;
+    
     setState(prev => ({ 
       ...prev, 
-      selectedBaseImage: img ? img.base64 : null,
+      selectedBaseImage: converted,
       resultsUpload: [],
       resultsPrompt: [],
       resultsKeep: [],
       error: null
     }));
-    // Note: useEffect will handle accordion state
   };
 
-  const PROMPT_LABELS = [
-      "Full Fit Reveal (Toàn thân)", 
-      "Side Profile (Góc nghiêng)", 
-      "Gentle Sway (Lắc lư nhẹ)",
-      "Subtle Pose (Tạo dáng nhẹ)",
-      "Static Confidence (Thần thái)"
-  ];
-
-  const VOICEOVER_LABELS = [
-      "Style Kể chuyện (Storytelling)",
-      "Style Săn Deal (FOMO)"
-  ];
-
-  const currentBaseImageObj = state.selectedBaseImage ? {
-      base64: state.selectedBaseImage,
-      previewUrl: `data:image/png;base64,${state.selectedBaseImage}`,
-      file: new File([], "base_image.png")
+  const currentBaseImageObj: ProcessedImage | null = state.selectedBaseImage ? {
+      file: state.selectedBaseImage.blob as File, 
+      previewUrl: state.selectedBaseImage.previewUrl
   } : null;
 
   const activeList = getCurrentResults();
   const currentItem = activeList[selectedIndex];
   const hasContent = currentItem?.videoPrompts && currentItem.videoPrompts.length > 0;
-  const currentImageUrl = currentItem ? `data:image/png;base64,${currentItem.base64}` : null;
+  const currentImageUrl = currentItem ? currentItem.previewUrl : null;
 
   const handlePreview = (url: string) => {
       setPreviewUrl(url);
       setIsPreviewOpen(true);
   };
 
+  // --- MEMORY CLEANUP LOGIC ---
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    return () => {
+      const s = stateRef.current;
+      
+      const revoke = (url: string | undefined) => {
+        if (url && url.startsWith('blob:')) {
+           URL.revokeObjectURL(url);
+        }
+      };
+
+      // Fix: Direct property access on captured state ref value
+      if (s.selectedBaseImage) revoke(s.selectedBaseImage.previewUrl);
+      if (s.backgroundImage) revoke(s.backgroundImage.previewUrl);
+
+      [s.resultsUpload, s.resultsPrompt, s.resultsKeep].forEach(list => {
+          list.forEach(item => {
+              revoke(item.previewUrl);
+              if (item.generatedAudios) {
+                  // Fix: Explicitly cast Object.values result to string array to fix 'unknown' assignability error
+                  (Object.values(item.generatedAudios) as string[]).forEach(audioUrl => revoke(audioUrl));
+              }
+          });
+      });
+    };
+  }, []);
+
   return (
     <div className="animate-in fade-in duration-500 pb-10">
       
       {!state.selectedBaseImage && mode === 'UPLOAD' && state.resultsUpload.length === 0 && !state.selectedBaseImage ? (
-          /* EMPTY STATE - INITIAL */
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 flex flex-col items-center justify-center min-h-[400px] text-center max-w-2xl mx-auto">
               <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-6">
                   <Upload size={36} />
@@ -423,15 +473,11 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
               </div>
           </div>
       ) : (
-        /* 2-COLUMN LAYOUT START */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
             
-            {/* LEFT COLUMN: CONTROLS (35%) */}
             <div className="lg:col-span-4 space-y-5">
                 
-                {/* STEP 1: BASE IMAGE - ACCORDION */}
                 <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden transition-all duration-300">
-                    {/* Header */}
                     <div 
                         onClick={() => setStep1Open(!step1Open)}
                         className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors select-none"
@@ -454,17 +500,16 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                     className="w-10 h-10 bg-white rounded border border-gray-200 p-0.5 animate-in zoom-in hover:border-indigo-300 transition-colors cursor-pointer"
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        handlePreview(`data:image/png;base64,${state.selectedBaseImage}`);
+                                        handlePreview(state.selectedBaseImage!.previewUrl);
                                     }}
                                 >
-                                    <img src={`data:image/png;base64,${state.selectedBaseImage}`} className="w-full h-full object-contain" alt="Mini Base" />
+                                    <img src={state.selectedBaseImage!.previewUrl} className="w-full h-full object-contain" alt="Mini Base" />
                                 </div>
                             )}
                             {step1Open ? <ChevronUp size={20} className="text-gray-400" /> : <ChevronDown size={20} className="text-gray-400" />}
                         </div>
                     </div>
 
-                    {/* Body */}
                     {step1Open && (
                          <div className="p-5 border-t border-gray-100 animate-in slide-in-from-top-1 duration-200">
                             <ImageUploader 
@@ -478,9 +523,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                     )}
                 </div>
 
-                {/* STEP 2: MODE & GENERATE - ACCORDION */}
                 <div className={`bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden transition-all duration-300 ${!state.selectedBaseImage ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
-                    {/* Header */}
                     <div 
                         onClick={() => state.selectedBaseImage && setStep2Open(!step2Open)}
                         className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors select-none"
@@ -500,10 +543,8 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                         {step2Open ? <ChevronUp size={20} className="text-gray-400" /> : <ChevronDown size={20} className="text-gray-400" />}
                     </div>
 
-                    {/* Body */}
                     {step2Open && (
                         <div className="p-4 border-t border-gray-100 animate-in slide-in-from-top-1 duration-200">
-                            {/* Mode Selection Tabs */}
                             <div className="flex bg-gray-100 rounded-xl p-1 mb-4">
                                 <button
                                 onClick={() => setMode('UPLOAD')}
@@ -540,7 +581,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 </button>
                             </div>
 
-                            {/* Dynamic Inputs based on Mode */}
                             <div className="mb-4">
                                 {mode === 'UPLOAD' && (
                                     <div className="animate-in fade-in slide-in-from-left-2 duration-300">
@@ -556,37 +596,78 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
 
                                 {mode === 'PROMPT' && (
                                     <div className="space-y-3 animate-in fade-in slide-in-from-left-2 duration-300">
-                                        <div className="flex justify-between items-center">
-                                            <label className="text-sm font-semibold text-gray-700">Mô tả bối cảnh</label>
+                                        <div className="space-y-1.5">
+                                            <label className="text-xs font-bold text-gray-700">1. Chọn chủ đề (Theme)</label>
+                                            <div className="flex flex-wrap gap-2">
+                                                {STYLE_PROMPTS && Object.keys(STYLE_PROMPTS).map((styleName) => (
+                                                    <button
+                                                        key={styleName}
+                                                        onClick={() => handleStyleChange(styleName)}
+                                                        className={`text-[11px] px-3 py-1.5 rounded-full border transition-all ${
+                                                            selectedStyle === styleName
+                                                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105'
+                                                            : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50'
+                                                        }`}
+                                                    >
+                                                        {styleName}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="flex justify-between items-center mt-2">
+                                            <label className="text-xs font-bold text-gray-700">2. Mô tả chi tiết</label>
                                             <button 
-                                                onClick={handleSuggest}
+                                                onClick={() => handleSuggest()} 
                                                 disabled={state.isSuggesting}
-                                                className="text-xs flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg hover:bg-indigo-100 transition-colors font-medium"
+                                                className="text-xs flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg hover:bg-indigo-100 transition-colors font-medium border border-indigo-100"
                                             >
-                                                {state.isSuggesting ? <Loader2 size={10} className="animate-spin" /> : <Lightbulb size={10} />}
-                                                Gợi ý
+                                                {state.isSuggesting ? <Loader2 size={12} className="animate-spin" /> : <Lightbulb size={12} />}
+                                                Gợi ý theo chủ đề
                                             </button>
                                         </div>
 
                                         {state.aiSuggestions.length > 0 && (
-                                            <div className="flex flex-wrap gap-2">
-                                            {state.aiSuggestions.map((sugg, idx) => (
-                                                <button
-                                                key={idx}
-                                                onClick={() => setState(prev => ({ ...prev, textPrompt: sugg }))}
-                                                className="text-[10px] bg-purple-50 text-purple-700 border border-purple-100 px-2 py-1 rounded-md hover:bg-purple-100 transition-colors text-left"
-                                                >
-                                                {sugg}
-                                                </button>
-                                            ))}
+                                            <div className="bg-gray-50 p-2 rounded-lg border border-gray-100 space-y-1.5">
+                                                <span className="text-[10px] uppercase font-bold text-gray-400 ml-1">Chọn không gian:</span>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    {state.aiSuggestions.map((sugg, idx) => {
+                                                        let label = `Phương án ${idx + 1}`;
+                                                        if (selectedStyle === "Đơn Giản (Modern Warm)") {
+                                                            const labels = ["Phòng Ngủ", "Phòng Khách", "Góc Tường"];
+                                                            label = labels[idx] || label;
+                                                        } else if (selectedStyle === "Retro (Home Studio)") {
+                                                            const labels = ["Góc Sofa", "Cửa Sổ", "Tường Bê Tông"];
+                                                            label = labels[idx] || label;
+                                                        } else if (selectedStyle === "Shop Thời Trang (Chow)") {
+                                                            const labels = ["Kệ Trưng Bày", "Phòng Thay Đồ", "Góc Thương Hiệu"];
+                                                            label = labels[idx] || label;
+                                                        }
+                                                        return (
+                                                            <button
+                                                                key={idx}
+                                                                onClick={() => setState(prev => ({ ...prev, textPrompt: sugg }))}
+                                                                className={`
+                                                                    text-[11px] py-2 px-1 rounded-md border transition-all font-bold truncate
+                                                                    ${state.textPrompt === sugg 
+                                                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
+                                                                        : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'}
+                                                                `}
+                                                                title={sugg}
+                                                            >
+                                                                {label}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
                                             </div>
                                         )}
 
                                         <textarea
                                             value={state.textPrompt}
                                             onChange={(e) => setState(prev => ({ ...prev, textPrompt: e.target.value }))}
-                                            placeholder="Ví dụ: Góc studio tại nhà phong cách Hàn Quốc..."
-                                            className="w-full p-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm h-32 resize-none"
+                                            placeholder={`Ví dụ: ${selectedStyle}...`}
+                                            className="w-full p-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm h-32 resize-none shadow-sm"
                                         />
                                     </div>
                                 )}
@@ -615,7 +696,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 </div>
                             )}
 
-                            {/* Generate Button */}
                             <button
                                 onClick={() => handleGenerate(false)}
                                 disabled={state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)}
@@ -624,7 +704,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 flex items-center justify-center gap-2 transition-all
                                 ${state.isGenerating || (mode === 'UPLOAD' && !state.backgroundImage) || (mode === 'PROMPT' && !state.textPrompt)
                                     ? 'bg-gray-300 cursor-not-allowed shadow-none' 
-                                    : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98]'}
+                                    : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] shadow-indigo-200'}
                                 `}
                             >
                                 {state.isGenerating && activeList.length === 0 ? (
@@ -646,11 +726,8 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                 </div>
 
             </div>
-            {/* END LEFT COLUMN */}
 
-            {/* RIGHT COLUMN: PREVIEW (65%) */}
             <div className="lg:col-span-8 bg-white rounded-2xl shadow-sm border border-gray-200 p-4 min-h-[600px] flex flex-col">
-                {/* Header */}
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-4">
                     <h3 className="font-bold text-gray-800 flex items-center gap-2">
                         Kết quả 
@@ -664,7 +741,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                 {activeList.length > 0 && currentItem ? (
                     <div className="flex-1 flex flex-col gap-5 animate-in fade-in duration-300">
                     
-                        {/* Main Image View */}
                         <div 
                             className="relative w-full aspect-[9/16] max-h-[70vh] rounded-xl overflow-hidden shadow-sm bg-gray-50 group mx-auto cursor-zoom-in"
                             onClick={() => handlePreview(currentImageUrl!)}
@@ -674,13 +750,11 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                 className="w-full h-full object-contain"
                                 alt="Final Result"
                             />
-                             {/* View Hint */}
                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors flex items-center justify-center pointer-events-none">
                                 <Maximize2 className="text-white opacity-0 group-hover:opacity-70 transition-opacity drop-shadow-md" size={40} />
                             </div>
                         </div>
 
-                        {/* Thumbnails */}
                         {activeList.length > 1 && (
                             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide py-1">
                                 {activeList.map((res, idx) => (
@@ -692,7 +766,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                     }`}
                                     >
                                     <img 
-                                        src={`data:image/png;base64,${res.base64}`} 
+                                        src={res.previewUrl} 
                                         className="w-full h-full object-cover" 
                                         alt={`Thumb ${idx}`}
                                     />
@@ -701,7 +775,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                             </div>
                         )}
 
-                        {/* Content Generation Accordions */}
                         <div className="bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
                             
                             {currentItem.isVideoPromptLoading ? (
@@ -710,27 +783,51 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                     <p className="text-sm font-medium">Đang viết kịch bản...</p>
                                 </div>
                             ) : !hasContent ? (
-                                <div className="p-4 flex items-center justify-between gap-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-full bg-white text-orange-500 flex items-center justify-center shadow-sm">
-                                            <FileText size={20} />
-                                        </div>
-                                        <div className="text-sm">
-                                            <p className="font-bold text-gray-800">Chưa có kịch bản</p>
-                                            <p className="text-xs text-gray-500">Tạo prompt video & lời thoại bán hàng.</p>
-                                        </div>
+                                <div className="p-4 space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      <div className="space-y-1.5">
+                                        <label className="text-[11px] font-bold text-gray-600 ml-1">Chất liệu (Optional):</label>
+                                        <input 
+                                          type="text" 
+                                          value={fabricInput}
+                                          onChange={(e) => setFabricInput(e.target.value)}
+                                          placeholder="Vd: Lụa, đũi, mát, co giãn..."
+                                          className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-1 focus:ring-indigo-500 outline-none transition-all shadow-sm"
+                                        />
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <label className="text-[11px] font-bold text-gray-600 ml-1">Chi tiết đặc biệt (Optional):</label>
+                                        <input 
+                                          type="text" 
+                                          value={detailInput}
+                                          onChange={(e) => setDetailInput(e.target.value)}
+                                          placeholder="Vd: Có mút ngực, kèm đai eo..."
+                                          className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:ring-1 focus:ring-indigo-500 outline-none transition-all shadow-sm"
+                                        />
+                                      </div>
                                     </div>
-                                    <button
-                                        onClick={() => handleAnalyzeContent(selectedIndex)}
-                                        className="bg-white border border-gray-200 hover:border-orange-300 text-gray-700 hover:text-orange-600 font-semibold py-2 px-4 rounded-lg flex items-center gap-2 text-xs transition-all shadow-sm"
-                                    >
-                                        <Sparkles size={14} />
-                                        Tạo ngay
-                                    </button>
+
+                                    <div className="flex items-center justify-between gap-4 pt-2">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-full bg-white text-orange-500 flex items-center justify-center shadow-sm">
+                                                <FileText size={20} />
+                                            </div>
+                                            <div className="text-sm">
+                                                <p className="font-bold text-gray-800">Chưa có kịch bản</p>
+                                                <p className="text-xs text-gray-500">Tạo prompt video & lời thoại bán hàng.</p>
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => handleAnalyzeContent(selectedIndex)}
+                                            className="bg-white border border-gray-200 hover:border-orange-300 text-gray-700 hover:text-orange-600 font-semibold py-2 px-4 rounded-lg flex items-center gap-2 text-xs transition-all shadow-sm"
+                                        >
+                                            <Sparkles size={14} />
+                                            Tạo ngay
+                                        </button>
+                                    </div>
                                 </div>
                             ) : (
                                 <div className="divide-y divide-gray-200">
-                                    {/* Accordion 1: Video Prompts */}
                                     <div>
                                         <button 
                                             onClick={() => setOpenSection(openSection === 'video' ? null : 'video')}
@@ -772,7 +869,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                         )}
                                     </div>
 
-                                    {/* Accordion 2: Voiceover */}
                                     <div>
                                         <button 
                                             onClick={() => setOpenSection(openSection === 'voiceover' ? null : 'voiceover')}
@@ -798,7 +894,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                                         <div key={idx} className="p-3 bg-gray-50 rounded-lg border border-gray-100 space-y-2">
                                                             <div className="flex justify-between items-center">
                                                                 <span className="text-[10px] font-bold uppercase text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
-                                                                    {VOICEOVER_LABELS[idx] || `Kịch bản ${idx + 1}`}
+                                                                   {idx === 0 ? "Style Kể chuyện (Storytelling)" : "Style Săn Deal (FOMO)"}
                                                                 </span>
                                                                 <button onClick={() => copyToClipboard(script, scriptId)} className="text-gray-400 hover:text-indigo-600">
                                                                     {isCopied ? <Check size={12} /> : <Copy size={12} />}
@@ -807,7 +903,7 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                                                             <textarea
                                                                 value={script}
                                                                 onChange={(e) => handleScriptChange(idx, e.target.value)}
-                                                                className="w-full text-xs text-gray-700 bg-white p-2 rounded border border-gray-200 h-16 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none"
+                                                                className="w-full text-xs text-gray-700 bg-white p-2 rounded border border-gray-200 h-24 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none"
                                                             />
                                                             <div className="flex items-center gap-2 pt-1">
                                                                 {!audioData ? (
@@ -842,7 +938,6 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                             )}
                         </div>
 
-                        {/* Actions Footer */}
                         <div className="grid grid-cols-2 gap-3 mt-auto pt-2">
                             <button 
                                 onClick={() => handleGenerate(true)}
@@ -874,13 +969,10 @@ export const BackgroundEditor: React.FC<BackgroundEditorProps> = ({ initialBaseI
                     </div>
                 )}
             </div>
-            {/* END RIGHT COLUMN */}
 
         </div>
-        /* 2-COLUMN LAYOUT END */
       )}
 
-      {/* Global Modal for Background Editor */}
       <ImagePreviewModal 
         isOpen={isPreviewOpen}
         onClose={() => setIsPreviewOpen(false)}

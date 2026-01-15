@@ -2,13 +2,14 @@
 import React, { useState, useEffect } from 'react';
 import { Download, RefreshCw, Layers, Plus, ArrowRight, Maximize2 } from 'lucide-react';
 import { ImagePreviewModal } from './ImagePreviewModal';
+import { GeneratedImage } from '../types';
 
 interface ResultDisplayProps {
-  results: string[];
+  results: GeneratedImage[];
   isRegenerating: boolean;
   onRegenerate: () => void;
   onReset: () => void;
-  onSelectForBackground: (imageBase64: string) => void;
+  onSelectForBackground: (image: GeneratedImage) => void;
 }
 
 export const ResultDisplay: React.FC<ResultDisplayProps> = ({ 
@@ -27,8 +28,8 @@ export const ResultDisplay: React.FC<ResultDisplayProps> = ({
 
   if (results.length === 0) return null;
 
-  const currentImageBase64 = results[selectedIndex];
-  const imageUrl = `data:image/png;base64,${currentImageBase64}`;
+  const currentResult = results[selectedIndex];
+  const imageUrl = currentResult.previewUrl;
 
   const handleDownload = () => {
     const link = document.createElement('a');
@@ -82,7 +83,7 @@ export const ResultDisplay: React.FC<ResultDisplayProps> = ({
                         }`}
                     >
                         <img 
-                            src={`data:image/png;base64,${res}`} 
+                            src={res.previewUrl} 
                             className="w-full h-full object-cover" 
                             alt={`Thumb ${idx}`}
                         />
@@ -95,7 +96,7 @@ export const ResultDisplay: React.FC<ResultDisplayProps> = ({
         <div className="mt-auto space-y-3">
             
             <button
-                onClick={() => onSelectForBackground(currentImageBase64)}
+                onClick={() => onSelectForBackground(currentResult)}
                 className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white py-3.5 px-6 rounded-xl font-bold shadow-md shadow-indigo-200 hover:shadow-lg hover:scale-[1.01] transition-all group"
             >
                 <Layers size={20} />

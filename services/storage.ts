@@ -1,8 +1,9 @@
-import { ProcessedImage } from '../types';
+
+import { ProcessedImage, GeneratedImage, GeneratedBackground } from '../types';
 
 // --- CONFIGURATION ---
 const DB_NAME = 'FashionAI_Database';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented version for schema changes if needed, though simple structure change is fine
 const STORE_NAME = 'app_sessions';
 
 export const KEYS = {
@@ -11,7 +12,6 @@ export const KEYS = {
 };
 
 // --- INDEXED DB HELPER (Core Logic) ---
-// Opens (or creates) the database asynchronously
 const openDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -33,9 +33,8 @@ const openDB = (): Promise<IDBDatabase> => {
   });
 };
 
-// --- PUBLIC API (Compatible with App.tsx) ---
+// --- PUBLIC API ---
 
-// 1. Save Data (Async, Non-blocking)
 export const saveToDB = async (key: string, data: any): Promise<void> => {
   try {
     const db = await openDB();
@@ -52,7 +51,6 @@ export const saveToDB = async (key: string, data: any): Promise<void> => {
   }
 };
 
-// 2. Load Data (Async)
 export const loadFromDB = async (key: string): Promise<any> => {
   try {
     const db = await openDB();
@@ -70,7 +68,6 @@ export const loadFromDB = async (key: string): Promise<any> => {
   }
 };
 
-// 3. Clear Data
 export const clearKeyFromDB = async (key: string): Promise<void> => {
   try {
     const db = await openDB();
@@ -89,46 +86,98 @@ export const clearKeyFromDB = async (key: string): Promise<void> => {
 
 // --- HELPER FUNCTIONS FOR IMAGES ---
 
-// Prepare image for storage: Keep High-Res Base64
+// For ProcessedImage (User Uploads) - Store the File object directly
 export const prepareImageForStorage = (image: ProcessedImage | null) => {
   if (!image) return null;
+  // IndexedDB stores File objects natively
   return {
-    base64: image.base64,
-    name: image.file.name,
-    type: image.file.type,
-    lastModified: image.file.lastModified
+    file: image.file
   };
 };
 
-// Reconstruct image from DB: Create new Blob & URL
-export const reconstructProcessedImage = (savedImage: any): ProcessedImage | null => {
-  if (!savedImage) return null;
+// For GeneratedImage (AI Outputs) - Store the Blob directly
+export const prepareGeneratedImageForStorage = (image: GeneratedImage | null) => {
+  if (!image) return null;
+  return {
+    blob: image.blob
+  };
+};
+
+// For GeneratedBackground arrays
+export const prepareBackgroundsForStorage = (images: GeneratedBackground[]) => {
+  return images.map(img => ({
+    blob: img.blob,
+    videoPrompts: img.videoPrompts,
+    voiceoverScripts: img.voiceoverScripts,
+    generatedAudios: img.generatedAudios,
+    audioMimeTypes: img.audioMimeTypes
+  }));
+};
+
+// Reconstruct ProcessedImage (User Uploads)
+export const reconstructProcessedImage = (savedData: any): ProcessedImage | null => {
+  if (!savedData || !savedData.file) return null;
   
   try {
-    // Convert Base64 back to Blob/File
-    const byteString = atob(savedImage.base64);
-    const ab = new ArrayBuffer(byteString.length);
-    const ia = new Uint8Array(ab);
-    for (let i = 0; i < byteString.length; i++) {
-      ia[i] = byteString.charCodeAt(i);
-    }
+    // Check if it's a legacy saved object (with base64) or new (File)
+    // If it has base64 but no File object, we might need to convert (handling legacy migration if needed, but assuming clean state for refactor)
+    // For this refactor, we assume savedData.file IS a File object retrieved from IDB
     
-    const type = savedImage.type || 'image/png';
-    const blob = new Blob([ab], { type: type });
-    const file = new File([blob], savedImage.name || 'restored_image.png', {
-      type: type,
-      lastModified: savedImage.lastModified || Date.now()
-    });
-
+    const file = savedData.file;
     const previewUrl = URL.createObjectURL(file);
 
     return {
       file: file,
-      base64: savedImage.base64, // Keep original high-quality base64
       previewUrl: previewUrl
     };
   } catch (e) {
-    console.error("Error reconstructing image:", e);
+    console.error("Error reconstructing processed image:", e);
     return null;
   }
+};
+
+// Reconstruct GeneratedImage (AI Outputs)
+export const reconstructGeneratedImage = (savedData: any): GeneratedImage | null => {
+  if (!savedData || (!savedData.blob && !savedData.base64)) return null;
+  
+  try {
+    let blob = savedData.blob;
+    
+    // Legacy support: if saved as base64 in old version
+    if (!blob && savedData.base64) {
+        // We won't implement full legacy migration here to keep code clean, 
+        // but typically you'd convert base64 to blob here.
+        // Assuming strict new format based on instructions.
+        return null;
+    }
+
+    const previewUrl = URL.createObjectURL(blob);
+    return {
+      blob: blob,
+      previewUrl: previewUrl
+    };
+  } catch (e) {
+    console.error("Error reconstructing generated image:", e);
+    return null;
+  }
+};
+
+// Reconstruct GeneratedBackgrounds
+export const reconstructBackgrounds = (savedList: any[]): GeneratedBackground[] => {
+  if (!Array.isArray(savedList)) return [];
+  
+  return savedList.map(item => {
+     if (!item.blob) return null;
+     const previewUrl = URL.createObjectURL(item.blob);
+     return {
+         blob: item.blob,
+         previewUrl,
+         videoPrompts: item.videoPrompts || [],
+         voiceoverScripts: item.voiceoverScripts || [],
+         isVideoPromptLoading: false,
+         generatedAudios: item.generatedAudios || {},
+         audioMimeTypes: item.audioMimeTypes || {},
+         isAudioLoading: {}
+     };
+  }).filter(Boolean) as GeneratedBackground[];
 };

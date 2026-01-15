@@ -1,13 +1,13 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultDisplay } from './components/ResultDisplay';
 import { BackgroundEditor } from './components/BackgroundEditor';
-import { ApiKeyModal } from './components/ApiKeyModal';
 import { ImagePreviewModal } from './components/ImagePreviewModal';
 import { generateTryOnImage, isolateProductImage } from './services/geminiService';
-import { saveToDB, loadFromDB, clearKeyFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage } from './services/storage';
-import { ProcessedImage, GenerationState, AppConfig, AppStep, GarmentType } from './types';
-import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, Key, CheckCircle2, Zap, ChevronDown, ChevronUp, Maximize2, RotateCcw, Download, Trash2 } from 'lucide-react';
+import { saveToDB, loadFromDB, clearKeyFromDB, KEYS, reconstructProcessedImage, prepareImageForStorage, reconstructGeneratedImage, prepareGeneratedImageForStorage } from './services/storage';
+import { ProcessedImage, GenerationState, AppConfig, AppStep, GarmentType, GeneratedImage } from './types';
+import { Sparkles, Loader2, AlertCircle, Shirt, Image as ImageIcon, Scissors, CheckCircle2, Zap, ChevronDown, ChevronUp, Maximize2, RotateCcw, Download, Trash2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Loading State for Restoration
@@ -31,9 +31,9 @@ const App: React.FC = () => {
 
   // Step 1 Data
   const [productImage, setProductImage] = useState<ProcessedImage | null>(null);
-  const [isolatedProduct, setIsolatedProduct] = useState<string | null>(null); 
+  const [isolatedProduct, setIsolatedProduct] = useState<GeneratedImage | null>(null); 
   const [isIsolating, setIsIsolating] = useState(false);
-  const [garmentType, setGarmentType] = useState<GarmentType>('FULL'); // New State for Garment Type
+  const [garmentType, setGarmentType] = useState<GarmentType>('FULL');
 
   const [modelImage, setModelImage] = useState<ProcessedImage | null>(null);
   const [config, setConfig] = useState<AppConfig>({ enableMannequin: false });
@@ -43,22 +43,13 @@ const App: React.FC = () => {
     error: null,
   });
   
-  // Step 2 Data
-  const [step2BaseImage, setStep2BaseImage] = useState<string | null>(null);
-  
-  // Api Key Modal State
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  // Step 2 Data (Input for Background Editor)
+  const [step2BaseImage, setStep2BaseImage] = useState<GeneratedImage | null>(null);
   
   // --- PERSISTENCE LOGIC START ---
   
-  // 1. Restore data on mount AND check API Key
+  // 1. Restore data on mount
   useEffect(() => {
-    // Check API Key
-    const hasKey = localStorage.getItem('GOOGLE_API_KEY');
-    if (!hasKey) {
-        setIsKeyModalOpen(true);
-    }
-
     const restoreSession = async () => {
       try {
         const savedData = await loadFromDB(KEYS.APP_SESSION);
@@ -69,14 +60,12 @@ const App: React.FC = () => {
             setProductImage(reconstructProcessedImage(savedData.productImage));
           }
           
-          // Restore Garment Type
           if (savedData.garmentType) {
             setGarmentType(savedData.garmentType);
           }
           
           if (savedData.isolatedProduct) {
-            setIsolatedProduct(savedData.isolatedProduct);
-            // Accordion Logic: If Step 1 is done, close it and open Step 2
+            setIsolatedProduct(reconstructGeneratedImage(savedData.isolatedProduct));
             setStep1Open(false);
             setStep2Open(true);
           } else {
@@ -89,22 +78,26 @@ const App: React.FC = () => {
           }
           if (savedData.config) setConfig(savedData.config);
           
-          if (savedData.tryOnState) {
-            // Restore results but reset loading state/error to clean slate
+          if (savedData.tryOnState && savedData.tryOnState.results) {
+             const reconstructedResults = savedData.tryOnState.results
+                .map(reconstructGeneratedImage)
+                .filter(Boolean) as GeneratedImage[];
+             
             setTryOnState({
               isLoading: false,
-              results: savedData.tryOnState.results || [],
+              results: reconstructedResults,
               error: null
             });
           }
           
-          if (savedData.step2BaseImage) setStep2BaseImage(savedData.step2BaseImage);
+          if (savedData.step2BaseImage) {
+              setStep2BaseImage(reconstructGeneratedImage(savedData.step2BaseImage));
+          }
         }
       } catch (e) {
         console.error("Failed to restore session", e);
       } finally {
-        // Short timeout to smooth out the transition
-        setTimeout(() => setIsRestoring(false), 200); // Faster restoration visual
+        setTimeout(() => setIsRestoring(false), 200); 
       }
     };
 
@@ -126,33 +119,31 @@ const App: React.FC = () => {
       const sessionData = {
         activeTab: current.activeTab,
         productImage: prepareImageForStorage(current.productImage),
-        isolatedProduct: current.isolatedProduct,
+        isolatedProduct: prepareGeneratedImageForStorage(current.isolatedProduct),
         modelImage: prepareImageForStorage(current.modelImage),
         config: current.config,
-        tryOnState: { results: current.tryOnState.results },
-        step2BaseImage: current.step2BaseImage,
-        garmentType: current.garmentType, // Save garment type
+        tryOnState: { results: current.tryOnState.results.map(prepareGeneratedImageForStorage) },
+        step2BaseImage: prepareGeneratedImageForStorage(current.step2BaseImage),
+        garmentType: current.garmentType, 
         timestamp: Date.now()
       };
       saveToDB(KEYS.APP_SESSION, sessionData);
   };
 
-  // 2. Auto-save when state changes (Debounced)
   const saveTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
-    if (isRestoring) return; // Don't save while restoring
+    if (isRestoring) return; 
 
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
     saveTimeoutRef.current = setTimeout(() => {
       performSave();
-    }, 1000); // Save after 1 second of inactivity
+    }, 1000); 
 
     return () => clearTimeout(saveTimeoutRef.current);
   }, [activeTab, productImage, isolatedProduct, modelImage, config, tryOnState.results, step2BaseImage, garmentType, isRestoring]);
 
-  // 3. FORCE SAVE on Visibility Change (Tab Switch/Mobile Home Screen)
   useEffect(() => {
     const handleVisibilityChange = () => {
         if (document.visibilityState === 'hidden') {
@@ -163,21 +154,17 @@ const App: React.FC = () => {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isRestoring]);
 
-  // FULL RESET FUNCTION (Soft Reset without Reload)
   const handleFullReset = async () => {
     if (!isResetConfirming) {
         setIsResetConfirming(true);
-        // Auto reset confirmation state after 3 seconds
         setTimeout(() => setIsResetConfirming(false), 3000);
         return;
     }
 
     try {
-        // 1. Clear IndexedDB
         await clearKeyFromDB(KEYS.APP_SESSION);
         await clearKeyFromDB(KEYS.BG_EDITOR_SESSION);
 
-        // 2. Reset React State Manually (Soft Reset)
         setActiveTab('TRY_ON');
         setStep1Open(true);
         setStep2Open(false);
@@ -190,7 +177,6 @@ const App: React.FC = () => {
         setStep2BaseImage(null);
         setGlobalPreviewUrl(null);
         
-        // 3. Force components to remount (clearing their internal states)
         setAppResetKey(prev => prev + 1);
 
         setIsResetConfirming(false);
@@ -201,16 +187,13 @@ const App: React.FC = () => {
     }
   };
 
-  // Sub-step 1.1: Isolate Product
   const handleIsolateProduct = async () => {
     if (!productImage) return;
     setIsIsolating(true);
     setTryOnState(prev => ({ ...prev, error: null }));
     try {
-      // Pass the selected garmentType to the service
-      const result = await isolateProductImage(productImage.base64, garmentType);
+      const result = await isolateProductImage(productImage.file, garmentType);
       setIsolatedProduct(result);
-      // Auto Advance Accordion: Close 1, Open 2
       setStep1Open(false);
       setStep2Open(true);
     } catch (error: any) {
@@ -223,18 +206,14 @@ const App: React.FC = () => {
   const handleDownloadIsolated = () => {
     if (!isolatedProduct) return;
     const link = document.createElement('a');
-    link.href = `data:image/png;base64,${isolatedProduct}`;
+    link.href = isolatedProduct.previewUrl;
     link.download = `isolated-product-${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Sub-step 1.2: Try On
   const handleGenerateTryOn = async (isRegenerate: boolean = false) => {
-    // DEBUG: Verify inputs before sending to API
-    console.log("Generating with:", { isolatedProduct: !!isolatedProduct, modelImage: !!modelImage });
-
     if (!isolatedProduct || !modelImage) {
       setTryOnState(prev => ({ ...prev, error: "Vui lòng hoàn thành bước chuẩn bị sản phẩm và chọn ảnh người mẫu." }));
       return;
@@ -243,14 +222,14 @@ const App: React.FC = () => {
     setTryOnState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
-      const resultBase64 = await generateTryOnImage(isolatedProduct, modelImage, config);
+      const resultImage = await generateTryOnImage(isolatedProduct.blob, modelImage, config);
       setTryOnState(prev => ({
         isLoading: false,
-        results: isRegenerate ? [resultBase64, ...prev.results] : [resultBase64],
+        results: isRegenerate ? [resultImage, ...prev.results] : [resultImage],
         error: null
       }));
-      // On mobile, maybe scroll to result?
-      window.scrollTo({ top: 300, behavior: 'smooth' });
+      setStep2Open(false); // Collapse Step 2 on success
+      window.scrollTo({ top: 100, behavior: 'smooth' });
     } catch (error: any) {
       setTryOnState(prev => ({ 
         ...prev,
@@ -260,19 +239,17 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSelectForBackground = (imageBase64: string) => {
-    setStep2BaseImage(imageBase64);
+  const handleSelectForBackground = (image: GeneratedImage) => {
+    setStep2BaseImage(image);
     setActiveTab('BACKGROUND_EDIT');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Partial Reset (Only used inside components)
   const handlePartialReset = () => {
     setModelImage(null);
     setTryOnState({ isLoading: false, results: [], error: null });
   };
 
-  // --- MOBILE NAVIGATION COMPONENT ---
   const MobileNav = () => (
     <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50 lg:hidden pb-safe">
        <div className="flex justify-around items-center h-16">
@@ -295,7 +272,6 @@ const App: React.FC = () => {
     </div>
   );
 
-  // --- DESKTOP NAVIGATION COMPONENT ---
   const DesktopNav = () => (
     <div className="hidden lg:flex justify-center mb-8">
         <div className="inline-flex bg-white p-1.5 rounded-2xl shadow-sm border border-gray-200">
@@ -336,20 +312,13 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] pb-24 lg:pb-10 font-sans text-slate-800">
-      <ApiKeyModal 
-        isOpen={isKeyModalOpen} 
-        onClose={() => setIsKeyModalOpen(false)} 
-        forceOpen={!localStorage.getItem('GOOGLE_API_KEY')}
-      />
       
-      {/* Global Image Preview Modal */}
       <ImagePreviewModal 
         isOpen={!!globalPreviewUrl}
         onClose={() => setGlobalPreviewUrl(null)}
         imageUrl={globalPreviewUrl}
       />
 
-      {/* Header */}
       <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 lg:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActiveTab('TRY_ON')}>
@@ -368,7 +337,6 @@ const App: React.FC = () => {
 
               <div className="h-6 w-px bg-gray-200 mx-2 hidden sm:block"></div>
 
-              {/* Reset Button */}
               <button
                 onClick={handleFullReset}
                 title="Xóa dữ liệu & Làm mới"
@@ -381,14 +349,6 @@ const App: React.FC = () => {
                 {isResetConfirming ? <Trash2 size={18} /> : <RotateCcw size={20} />}
                 {isResetConfirming && <span className="text-xs font-bold whitespace-nowrap">Xác nhận xóa?</span>}
               </button>
-
-              <button
-                onClick={() => setIsKeyModalOpen(true)}
-                className="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                title="Cài đặt API Key"
-              >
-                <Key size={20} />
-              </button>
           </div>
         </div>
       </header>
@@ -397,7 +357,6 @@ const App: React.FC = () => {
         
         <DesktopNav />
 
-        {/* Global Error */}
         {tryOnState.error && activeTab === 'TRY_ON' && (
           <div className="max-w-3xl mx-auto mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 text-red-700 animate-in fade-in slide-in-from-top-4 shadow-sm">
             <AlertCircle className="shrink-0 mt-0.5" size={20} />
@@ -411,18 +370,13 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 1: TRY ON */}
         <div className={activeTab === 'TRY_ON' ? 'block animate-in fade-in duration-300' : 'hidden'}>
             
-            {/* 2-COLUMN LAYOUT START */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
                 
-                {/* LEFT COLUMN: CONTROLS (35%) */}
                 <div className="lg:col-span-4 space-y-5">
                     
-                    {/* Card 1: Product Input - ACCORDION */}
                     <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden transition-all duration-300">
-                        {/* Header */}
                         <div 
                             onClick={() => setStep1Open(!step1Open)}
                             className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors select-none"
@@ -445,17 +399,16 @@ const App: React.FC = () => {
                                         className="w-10 h-10 bg-white rounded border border-gray-200 p-0.5 animate-in zoom-in hover:border-indigo-300 transition-colors cursor-pointer"
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            setGlobalPreviewUrl(`data:image/png;base64,${isolatedProduct}`);
+                                            setGlobalPreviewUrl(isolatedProduct.previewUrl);
                                         }}
                                     >
-                                        <img src={`data:image/png;base64,${isolatedProduct}`} className="w-full h-full object-contain" alt="Mini" />
+                                        <img src={isolatedProduct.previewUrl} className="w-full h-full object-contain" alt="Mini" />
                                     </div>
                                 )}
                                 {step1Open ? <ChevronUp size={20} className="text-gray-400" /> : <ChevronDown size={20} className="text-gray-400" />}
                             </div>
                         </div>
 
-                        {/* Body */}
                         {step1Open && (
                             <div className="p-5 border-t border-gray-100 animate-in slide-in-from-top-1 duration-200">
                                 <div className="space-y-4">
@@ -470,7 +423,6 @@ const App: React.FC = () => {
                                         }}
                                     />
                                     
-                                    {/* Garment Type Selector */}
                                     {productImage && (
                                       <div className="animate-in fade-in slide-in-from-left-2 duration-300">
                                         <label className="text-xs font-semibold text-gray-500 mb-2 block uppercase tracking-wider">Chọn loại trang phục cần lấy:</label>
@@ -509,7 +461,6 @@ const App: React.FC = () => {
                                       </div>
                                     )}
 
-                                    {/* Isolation Controls */}
                                     {productImage && (
                                         <div className="mt-3">
                                             {!isolatedProduct ? (
@@ -523,13 +474,12 @@ const App: React.FC = () => {
                                                 </button>
                                             ) : (
                                                 <div className="flex items-center justify-between p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl group transition-colors hover:bg-emerald-50">
-                                                    {/* Left: Info */}
                                                     <div 
                                                         className="flex items-center gap-4 cursor-pointer"
-                                                        onClick={() => setGlobalPreviewUrl(`data:image/png;base64,${isolatedProduct}`)}
+                                                        onClick={() => setGlobalPreviewUrl(isolatedProduct.previewUrl)}
                                                     >
                                                         <div className="w-14 h-14 bg-white rounded-lg border border-emerald-100 p-1 relative shadow-sm overflow-hidden flex-shrink-0">
-                                                            <img src={`data:image/png;base64,${isolatedProduct}`} className="w-full h-full object-contain" alt="Isolated" />
+                                                            <img src={isolatedProduct.previewUrl} className="w-full h-full object-contain" alt="Isolated" />
                                                             <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/10">
                                                                 <Maximize2 size={16} className="text-white drop-shadow-md" />
                                                             </div>
@@ -543,7 +493,6 @@ const App: React.FC = () => {
                                                         </div>
                                                     </div>
 
-                                                    {/* Right: Actions Buttons */}
                                                     <div className="flex items-center gap-2 pl-2">
                                                         <button 
                                                             onClick={(e) => {
@@ -577,9 +526,7 @@ const App: React.FC = () => {
                         )}
                     </div>
 
-                    {/* Card 2: Model Input - ACCORDION */}
                     <div className={`bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden transition-all duration-300 ${!isolatedProduct ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
-                        {/* Header */}
                         <div 
                             onClick={() => isolatedProduct && setStep2Open(!step2Open)}
                             className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors select-none"
@@ -612,7 +559,6 @@ const App: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Body */}
                         {step2Open && (
                             <div className="p-5 border-t border-gray-100 animate-in slide-in-from-top-1 duration-200">
                                 <div className="space-y-4">
@@ -624,7 +570,6 @@ const App: React.FC = () => {
                                         onImageChange={setModelImage}
                                     />
                                     
-                                    {/* Mannequin Toggle */}
                                     <div className="flex items-center justify-between bg-gray-50 p-3 rounded-xl border border-gray-100">
                                         <div className="flex flex-col">
                                             <span className="text-sm font-semibold text-gray-700">Thêm Manocanh</span>
@@ -636,7 +581,6 @@ const App: React.FC = () => {
                                         </div>
                                     </div>
 
-                                    {/* Generate Action Button - Moved Inside Accordion */}
                                     <button
                                         onClick={() => handleGenerateTryOn(false)}
                                         disabled={tryOnState.isLoading || !isolatedProduct || !modelImage}
@@ -665,9 +609,7 @@ const App: React.FC = () => {
                         )}
                     </div>
                 </div>
-                {/* END LEFT COLUMN */}
 
-                {/* RIGHT COLUMN: PREVIEW (65%) */}
                 <div className="lg:col-span-8 h-full">
                     
                     {tryOnState.results.length === 0 ? (
@@ -694,14 +636,11 @@ const App: React.FC = () => {
                     )}
 
                 </div>
-                {/* END RIGHT COLUMN */}
 
             </div>
-            {/* 2-COLUMN LAYOUT END */}
 
         </div>
 
-        {/* TAB 2: BACKGROUND EDIT */}
         <div className={activeTab === 'BACKGROUND_EDIT' ? 'block animate-in fade-in duration-300' : 'hidden'}>
            <BackgroundEditor 
             key={`bg-editor-${appResetKey}`}

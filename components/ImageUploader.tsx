@@ -1,7 +1,6 @@
 
 import React, { useRef, useState } from 'react';
-import { Upload, Image as ImageIcon, Edit2, Maximize2 } from 'lucide-react';
-import { fileToBase64 } from '../services/utils';
+import { Upload, Edit2, Maximize2 } from 'lucide-react';
 import { ProcessedImage } from '../types';
 import { ImagePreviewModal } from './ImagePreviewModal';
 
@@ -31,18 +30,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
     try {
       const previewUrl = URL.createObjectURL(file);
-      
-      // 1. Get raw string from utils
-      let rawBase64 = await fileToBase64(file);
-      
-      // 2. SAFETY STRIP: If string still has a header (e.g. "data:image/png;base64,..."), remove it.
-      // This protects against edge cases in utils or previous dirty state
-      if (rawBase64.includes('base64,')) {
-          rawBase64 = rawBase64.split('base64,')[1];
-      }
-
-      // 3. Send Clean Data UP
-      onImageChange({ file, previewUrl, base64: rawBase64 });
+      // Remove Base64 generation here. We just pass the File and URL.
+      onImageChange({ file, previewUrl });
     } catch (err) {
       console.error("Error processing file", err);
       alert("Lỗi khi xử lý ảnh.");
@@ -87,10 +76,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         </label>
       )}
       
-      {/* 
-         CONTAINER: Chỉ chịu trách nhiệm hiển thị khung viền. 
-         KHÔNG GẮN SỰ KIỆN ONCLICK Ở ĐÂY để tránh conflict.
-      */}
       <div 
         tabIndex={0} 
         onPaste={handlePaste}
@@ -108,12 +93,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
         {image ? (
           <>
-            {/* 
-               LAYER 1: VIEW AREA (Vùng Xem Ảnh)
-               - Nằm dưới (z-10)
-               - Chiếm toàn bộ diện tích
-               - Chỉ xử lý mở Lightbox
-            */}
             <div 
                 className="absolute inset-0 z-10 cursor-zoom-in"
                 onClick={() => setIsPreviewOpen(true)}
@@ -123,22 +102,14 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                     alt={label} 
                     className="w-full h-full object-contain p-2"
                 />
-                {/* Hover Hint Overlay */}
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors flex items-center justify-center pointer-events-none">
                      <Maximize2 className="text-white opacity-0 group-hover:opacity-70 transition-opacity drop-shadow-md" size={32} />
                 </div>
             </div>
 
-            {/* 
-               LAYER 2: ACTION BUTTON (Nút Thay Ảnh)
-               - Nằm trên (z-20)
-               - Là 'anh em' (sibling) với Layer 1, không phải con
-               - Chỉ xử lý Upload
-            */}
             <button
                 type="button"
                 onClick={(e) => {
-                    // Chặn lan truyền sự kiện an toàn tuyệt đối vì nó nằm trên layer riêng
                     e.stopPropagation();
                     triggerUpload();
                 }}
@@ -156,10 +127,6 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
             />
           </>
         ) : (
-          /* 
-             EMPTY STATE LAYER
-             - Khi chưa có ảnh, toàn bộ vùng này là nút Upload
-          */
           <div 
             className="absolute inset-0 z-10 flex flex-col items-center justify-center p-4 text-center cursor-pointer"
             onClick={triggerUpload}

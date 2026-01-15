@@ -1,47 +1,26 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { AppConfig, ProcessedImage, GarmentType } from "../types";
-import { blobToBase64 } from "./utils";
+import { AppConfig, ProcessedImage, GarmentType, GeneratedImage } from "../types";
+import { blobToBase64, fileToBase64, base64ToBlob } from "./utils";
 
-// REVERT: Back to Gemini 2.5 Flash Image as requested
+// Model for Image Tasks
 const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
-// Model for Text Analysis
+// Model for Basic Text Tasks
 const TEXT_MODEL_NAME = 'gemini-3-flash-preview';
 
-// --- API KEY HELPER ---
-const getApiKey = (): string => {
-  const key = localStorage.getItem('GOOGLE_API_KEY');
-  if (!key) {
-    throw new Error("Vui lòng nhập Google API Key trong phần Cài đặt (Icon Chìa khóa).");
-  }
-  return key;
-};
+/**
+ * GUIDELINE COMPLIANCE:
+ * The API key must be obtained exclusively from the environment variable process.env.API_KEY.
+ * The application must not ask the user for it under any circumstances.
+ */
 
-// --- MIME TYPE HELPER (ROBUST) ---
-const getMimeType = (file: File): string => {
-  // 1. Trust browser if available and valid
-  if (file && file.type) return file.type;
-  
-  // 2. Fallback to filename extension
-  if (file && file.name) {
-      const name = file.name.toLowerCase();
-      if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
-      if (name.endsWith('.webp')) return 'image/webp';
-      if (name.endsWith('.png')) return 'image/png';
-  }
-  
-  // 3. Ultimate Fallback (Gemini handles PNG/JPEG leniency well)
-  return 'image/png';
-};
-
-// --- NEW: VALIDATE API KEY ---
+// --- NEW: VALIDATE API KEY (Updated to use process.env.API_KEY) ---
 export const validateApiKey = async (apiKey: string): Promise<boolean> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey });
-    // Gọi thử một request cực nhẹ (ví dụ: chào 'hi') để xem key có hoạt động không
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     await ai.models.generateContent({
       model: TEXT_MODEL_NAME,
-      contents: { parts: [{ text: "hi" }] },
+      contents: "hi",
     });
     return true;
   } catch (error) {
@@ -51,9 +30,10 @@ export const validateApiKey = async (apiKey: string): Promise<boolean> => {
 };
 
 // GIAI ĐOẠN 1 CỦA BƯỚC 1: Tách nền sản phẩm (GHOST MANNEQUIN)
-export const isolateProductImage = async (productImageBase64: string, garmentType: GarmentType = 'FULL'): Promise<string> => {
+export const isolateProductImage = async (productImageBlob: Blob, garmentType: GarmentType = 'FULL'): Promise<GeneratedImage> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    // Initializing with process.env.API_KEY directly
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     // STRICT GHOST MANNEQUIN PROMPT LOGIC
     let specificInstruction = "";
@@ -85,7 +65,6 @@ export const isolateProductImage = async (productImageBase64: string, garmentTyp
         break;
     }
 
-    // Thay đoạn prompt cũ bằng đoạn này để ép lấy nét tối đa
     const prompt = `
       TASK: Precise Garment Extraction (High-Fidelity).
       INPUT: Raw product image.
@@ -100,16 +79,19 @@ export const isolateProductImage = async (productImageBase64: string, garmentTyp
       4. COMPOSITION: Center the garment. Do not crop off any edges.
     `;
 
+    // Convert Blob to Base64 for API
+    const base64Data = await blobToBase64(productImageBlob);
+
     const response = await ai.models.generateContent({
       model: IMAGE_MODEL_NAME,
       contents: {
         parts: [
-          { inlineData: { mimeType: "image/png", data: productImageBase64 } },
+          { inlineData: { mimeType: "image/png", data: base64Data } },
           { text: prompt }
         ]
       },
       config: {
-        imageConfig: { aspectRatio: "1:1" }, // Square aspect ratio for product shot
+        imageConfig: { aspectRatio: "1:1" },
       }
     });
 
@@ -117,7 +99,10 @@ export const isolateProductImage = async (productImageBase64: string, garmentTyp
       const parts = response.candidates[0].content.parts;
       for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
-          return part.inlineData.data;
+          // Convert Result Base64 to Blob
+          const blob = base64ToBlob(part.inlineData.data, "image/png");
+          const previewUrl = URL.createObjectURL(blob);
+          return { blob, previewUrl };
         }
       }
     }
@@ -130,12 +115,12 @@ export const isolateProductImage = async (productImageBase64: string, garmentTyp
 
 // GIAI ĐOẠN 2 CỦA BƯỚC 1: Ghép vào mẫu
 export const generateTryOnImage = async (
-  isolatedProductBase64: string, // Input is now the clean product image
+  isolatedProductBlob: Blob,
   modelImage: ProcessedImage,
   config: AppConfig
-): Promise<string> => {
+): Promise<GeneratedImage> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     let promptText = `
     Nhiệm vụ: Virtual Try-On & Auto-Harmonize (Thử đồ & Tự động cân bằng tổng thể).
@@ -166,7 +151,7 @@ QUY TRÌNH XỬ LÝ:
 4. BẢO TOÀN:
    - Tuyệt đối giữ nguyên khuôn mặt và bối cảnh.
 
-KẾT QUẢ: Một bức ảnh hài hòa, nơi trang phục và phụ kiện ăn nhập với nhau (do AI tự đánh giá và quyết định).
+KẾT QUẢ: Một bức ảnh hài hòa, nơi trang phục và phụ kiện ăn nhập with nhau (do AI tự đánh giá và quyết định).
     `;
 
     if (config.enableMannequin) {
@@ -175,12 +160,15 @@ KẾT QUẢ: Một bức ảnh hài hòa, nơi trang phục và phụ kiện ăn
       `;
     }
 
+    const isolatedBase64 = await blobToBase64(isolatedProductBlob);
+    const modelBase64 = await fileToBase64(modelImage.file);
+
     const contents = {
       parts: [
         { text: "ẢNH 1 (SẢN PHẨM MỚI):" },
-        { inlineData: { mimeType: "image/png", data: isolatedProductBase64 } },
+        { inlineData: { mimeType: "image/png", data: isolatedBase64 } },
         { text: "ẢNH 2 (NGƯỜI MẪU GỐC):" },
-        { inlineData: { mimeType: getMimeType(modelImage.file), data: modelImage.base64 } },
+        { inlineData: { mimeType: "image/png", data: modelBase64 } },
         { text: promptText },
       ],
     };
@@ -197,7 +185,9 @@ KẾT QUẢ: Một bức ảnh hài hòa, nơi trang phục và phụ kiện ăn
       const parts = response.candidates[0].content.parts;
       for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
-          return part.inlineData.data;
+          const blob = base64ToBlob(part.inlineData.data, "image/png");
+          const previewUrl = URL.createObjectURL(blob);
+          return { blob, previewUrl };
         }
       }
     }
@@ -208,28 +198,89 @@ KẾT QUẢ: Một bức ảnh hài hòa, nơi trang phục và phụ kiện ăn
   }
 };
 
+// Define the expert prompts for each style
+export const STYLE_PROMPTS: Record<string, string> = {
+  "Retro (Home Studio)": `
+    STRICT OUTPUT REQUIREMENT: Generate exactly 3 detailed paragraphs corresponding to:
+    1. Living Room Corner (Góc Sofa)
+    2. Window Area (Bên Cửa Sổ)
+    3. Concrete Wall (Tường Bê Tông)
+
+    --- MASTER STYLE ---
+    - VIBE: Modern City Apartment, Soft Industrial & Korean Minimalist.
+    - LIGHTING: Soft natural daylight, sun-drenched, cinematic shadows.
+    - TECH: Shot on 35mm film, soft focus, high resolution, vintage grain.
+
+    --- SCENE DETAILS ---
+    1. (Living Room Corner): A beige curved sofa against a raw concrete wall, scattered indie fashion magazines, a sheepskin rug. Lived-in and cozy.
+    2. (Window Area): Standing next to large floor-to-ceiling windows with sheer white curtains. Soft golden hour light flooding in, creating a dreamy silhouette backdrop.
+    3. (Concrete Wall): A textured raw concrete wall corner with a retro standing lamp and a vinyl record player. Minimalist but artsy background.
+  `,
+
+  "Đơn Giản (Modern Warm)": `
+    STRICT OUTPUT REQUIREMENT: Generate exactly 3 detailed paragraphs corresponding to:
+    1. Bedroom (Phòng Ngủ)
+    2. Living Room (Phòng Khách)
+    3. Aesthetic Wall Corner (Góc Tường)
+
+    --- MASTER STYLE ---
+    - VIBE: Warm, inviting, "lived-in" modern home, high-end but cozy.
+    - LIGHTING: Golden hour sunlight mixed with warm indoor lamps.
+    - TECH: 85mm portrait lens, shallow depth of field (Bokeh), photorealistic.
+
+    --- SCENE DETAILS ---
+    1. (Bedroom): Focus on a cozy bed with messy cream linens. Background features a sleek glass fashion cabinet (blurred) to add depth.
+    2. (Living Room): A modern lounge area with a soft rug, warm oak flooring, and a coffee table. Sunlight streaming through sheer curtains.
+    3. (Wall Corner): A clean corner featuring a textured plaster wall, a large leaning floor mirror, and a single decorative vase.
+  `,
+
+  "Shop Thời Trang (Chow)": `
+    STRICT OUTPUT REQUIREMENT: Generate exactly 3 detailed paragraphs corresponding to:
+    1. Display Area (Kệ Trưng Bày)
+    2. Fitting Room (Phòng Thay Đồ)
+    3. Brand Corner (Góc Thương Hiệu)
+
+    --- MASTER STYLE ---
+    - REALISM: Hyper-realistic interior photography, 8k resolution, raw photo style, architectural digest aesthetic. NO plastic/3D render look.
+    - VIBE: Modern, sophisticated multi-brand boutique. Clean lines, neutral tones (White/Grey/Metallic) to highlight the clothes.
+    - CLOTHING: Rails filled with a DIVERSE collection of female fashion (various colors, textures, lengths, and styles).
+    - LIGHTING: Mix of natural window light and professional track lighting, creating realistic shadows and highlights.
+
+    --- SCENE DETAILS ---
+    1. (Display Area): A main aisle view featuring elegant brushed-gold clothing racks on both sides. The racks are stocked with a colorful variety of women's dresses, blazers, and shirts. The floor is polished concrete or marble, reflecting the clothes realistically.
+    2. (Fitting Room): A chic fitting room area with heavy textured velvet curtains (in a neutral color like beige or charcoal), a large high-clarity full-body mirror, and a plush rug. The lighting is flattering and soft.
+    3. (Brand Corner): A stylish feature wall (textured stone or wood paneling) with the brand name "Chow" in a sleek metallic finish (Silver or Gold). Next to it, a mannequin wearing a trendy outfit and some potted plants for a natural touch.
+  `
+};
+
 // Step 2: Suggest Backgrounds (Uses Flash text model)
-export const suggestBackgrounds = async (imageBase64: string): Promise<string[]> => {
+export const suggestBackgrounds = async (imageBlob: Blob, styleKey: string = "Retro (Home Studio)"): Promise<string[]> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
+    // Get the expert prompt based on selection (fallback to first one)
+    const expertContext = STYLE_PROMPTS[styleKey] || STYLE_PROMPTS["Retro (Home Studio)"];
+
     const prompt = `
-      "Bạn là Giám đốc Hình ảnh cho một thương hiệu thời trang thiết kế trẻ trung (local brand). Hãy lên ý tưởng cho 3 bối cảnh chụp ảnh lookbook tại nhà (home-studio vibe).
-      Bối cảnh chung (The Vibe): Một căn hộ chung cư cao tầng hiện đại (Modern City Apartment) với phong cách Soft Industrial & Korean Minimalist. Không gian phải sáng sủa, gọn gàng, có gu nhưng gần gũi, không quá xa hoa hào nhoáng.
-      + Vẫn giữ các yếu tố đặc trưng: Tường bê tông sáng màu hoặc trát vữa (plaster), sàn gỗ ấm, và ánh sáng tự nhiên từ cửa sổ.
-      Nhiệm vụ: Gợi ý 3 góc chụp đời thường (lifestyle corners) khác nhau trong căn hộ này.
-      + Quan trọng: Các không gian phải được trang trí theo lối sống thực tế (lived-in), có các đồ vật decor mềm mại như thảm lông, rèm voan, gương toàn thân, tạp chí, cốc cafe... để tạo cảm giác gần gũi.
-      Yêu cầu đầu ra:
-      - Chỉ trả về một JSON Array chứa 3 chuỗi string bằng Tiếng Anh.
-      - Các mô tả cần chi tiết, giàu hình ảnh và không khí (không giới hạn số từ).
-      Ví dụ output mong muốn (Mô tả kiểu gần gũi): ["A cozy living room corner with a grey fabric sofa, a textured concrete wall softened by a beige rug and a standing lamp, natural light coming from the balcony.", "A bright bedroom setup with a white messy bed, a large leaning floor mirror reflecting the window view, and some fashion magazines on the floor.", "A clean aesthetic workspace area with a wooden desk, a grid moodboard on the concrete wall, and a pot of monstera plant receiving sunlight."]"
+      You are a Creative Director for a fashion brand.
+      Based on this image (which I will use as a reference), generate 3 distinct background descriptions for a photoshoot.
+      
+      THEME & STYLE REQUIRED:
+      ${expertContext}
+
+      OUTPUT REQUIREMENT:
+      - Return ONLY a JSON Array of 3 strings (English).
+      - Each string must be a highly detailed image generation prompt.
+      - Do NOT include markdown code blocks (like \`\`\`json). Just the raw array.
     `;
+
+    const base64Data = await blobToBase64(imageBlob);
 
     const response = await ai.models.generateContent({
       model: TEXT_MODEL_NAME,
       contents: {
         parts: [
-           { inlineData: { mimeType: "image/png", data: imageBase64 } },
+           { inlineData: { mimeType: "image/png", data: base64Data } },
            { text: prompt }
         ]
       },
@@ -245,7 +296,7 @@ export const suggestBackgrounds = async (imageBase64: string): Promise<string[]>
       const cleanedText = text.replace(/```json|```/g, '').trim();
       const json = JSON.parse(cleanedText);
       if (Array.isArray(json)) {
-        return json.map(item => String(item).trim());
+        return json.map((item: any) => String(item).trim());
       }
       return ["Studio phông trắng", "Đường phố hiện đại", "Quán cafe sang trọng"];
     } catch (e) {
@@ -258,19 +309,18 @@ export const suggestBackgrounds = async (imageBase64: string): Promise<string[]>
     }
   } catch (error) {
     console.error("Suggestion Error:", error);
-    // Return defaults if API key is missing or other error, but user should be prompted for key by UI handling
     return ["Nền màu be tối giản", "Đường phố thành thị", "Nội thất sang trọng"];
   }
 };
 
 // Step 2: Change Background
 export const changeBackground = async (
-  baseImageBase64: string,
+  baseImageBlob: Blob,
   prompt: string,
   backgroundImage?: ProcessedImage | null
-): Promise<string> => {
+): Promise<GeneratedImage> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     let finalPrompt = `
       Nhiệm vụ: Thay đổi bối cảnh (background).
@@ -280,9 +330,11 @@ export const changeBackground = async (
       Lưu ý: Giữ nguyên khuôn mặt của người mẫu tuyệt đối không thay đổi khuôn mặt người mẫu
     `;
 
+    const base64Data = await blobToBase64(baseImageBlob);
+
     const parts: any[] = [
       { text: "ẢNH GỐC:" },
-      { inlineData: { mimeType: "image/png", data: baseImageBase64 } }
+      { inlineData: { mimeType: "image/png", data: base64Data } }
     ];
 
     if (backgroundImage) {
@@ -292,8 +344,9 @@ export const changeBackground = async (
         + Xử lý bóng đổ và ánh sáng chân thực.
         Lưu ý: Giữ nguyên khuôn mặt của người mẫu tuyệt đối không thay đổi khuôn mặt người mẫu
       `;
+      const bgBase64 = await fileToBase64(backgroundImage.file);
       parts.push({ text: "ẢNH NỀN MỚI:" });
-      parts.push({ inlineData: { mimeType: getMimeType(backgroundImage.file), data: backgroundImage.base64 } });
+      parts.push({ inlineData: { mimeType: "image/png", data: bgBase64 } });
     }
     
     parts.push({ text: finalPrompt });
@@ -310,7 +363,9 @@ export const changeBackground = async (
       const parts = response.candidates[0].content.parts;
       for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
-          return part.inlineData.data;
+           const blob = base64ToBlob(part.inlineData.data, "image/png");
+           const previewUrl = URL.createObjectURL(blob);
+           return { blob, previewUrl };
         }
       }
     }
@@ -323,9 +378,52 @@ export const changeBackground = async (
 };
 
 // NEW: Analyze image to generate 5 Video Prompts AND 2 Voiceover Scripts
-export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
+export const generateVideoPrompt = async (
+  imageBlob: Blob,
+  fabricInfo?: string,
+  detailInfo?: string
+): Promise<{ videoPrompts: string[], voiceoverScripts: string[] }> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+    // --- 1. KHAI BÁO BIẾN RANDOM ---
+    const PERSONAS = [
+      "Bạn thân Gen Z (Vibe thân thiện): Dùng từ trẻ trung, năng lượng cao, xưng tui-bà.",
+      "Chuyên gia Review (Vibe khó tính): Tập trung độ bền, kỹ thuật may, thực dụng.",
+      "Stylist (Vibe sang chảnh): Tư vấn phối đồ, thẩm mỹ, tôn dáng.",
+      "Storyteller (Vibe cảm xúc): Dùng so sánh, ẩn dụ tả cảm giác mặc.",
+      "Thợ săn sale (Vibe nhanh gọn): Tập trung tính ứng dụng và độ hời."
+    ];
+
+    const ANGLES = [
+      "Góc độ: Hack dáng & Che khuyết điểm.",
+      "Góc độ: Soi chi tiết chất liệu & Cảm giác.",
+      "Góc độ: Tính ứng dụng thực tế (Mặc đi đâu).",
+      "Góc độ: Thần thái & Cảm xúc.",
+      "Góc độ: So sánh & Phản biện."
+    ];
+
+    const HOOKS = [
+      "Mở đầu: Câu hỏi nghi vấn/thách thức.",
+      "Mở đầu: Cảnh báo/Ngăn cản ngược.",
+      "Mở đầu: So sánh hài hước.",
+      "Mở đầu: Đánh vào nỗi sợ (béo, đen, già).",
+      "Mở đầu: Fact check/Sự thật bất ngờ."
+    ];
+
+    // --- 2. XỬ LÝ DỮ LIỆU ĐẦU VÀO ---
+    const fabricInstruction = fabricInfo 
+      ? `THÔNG TIN CHẤT LIỆU (User cung cấp): "${fabricInfo}". -> HÃY DÙNG THÔNG TIN NÀY. Biến tấu theo vai diễn (Gen Z tả độ mát/êm, Chuyên gia gọi tên chất vải).`
+      : `KHÔNG CÓ THÔNG TIN CHẤT LIỆU. -> TỰ QUAN SÁT ẢNH. Chỉ dùng từ chỉ cảm quan (bóng, rủ, dày dặn). CẤM bịa tên vải (lụa, gấm) nếu không chắc chắn.`;
+
+    const detailInstruction = detailInfo
+      ? `THÔNG TIN CHI TIẾT (User cung cấp): "${detailInfo}". -> HÃY LỒNG GHÉP VÀO LỜI THOẠI. (Ví dụ: Nếu có "mút ngực" -> Khen tiện lợi, không lo lộ. Nếu có "buộc eo" -> Khen hack dáng). Đừng liệt kê, hãy khen tự nhiên.`
+      : `KHÔNG CÓ CHI TIẾT ĐẶC BIỆT. -> TỰ QUAN SÁT FORM DÁNG TRÊN ẢNH để bình luận.`;
+
+    // --- 3. Randomize Context ---
+    const p = PERSONAS[Math.floor(Math.random() * PERSONAS.length)];
+    const a = ANGLES[Math.floor(Math.random() * ANGLES.length)];
+    const h = HOOKS[Math.floor(Math.random() * HOOKS.length)];
     
     const prompt = `
     Phân tích kỹ dữ liệu thị giác của bức ảnh để thực hiện 2 nhiệm vụ sau:
@@ -345,31 +443,34 @@ export const generateVideoPrompt = async (imageBase64: string): Promise<{ videoP
       3. The "Vibe" Check (Slow camera drift. Model shifts weight gently from one hip to the other, checking out their fit in the mirror/camera. Relaxed atmosphere).
       4. Angle Shift (Floating camera moves slightly around the model (very small arc). Model turns head slowly to follow the camera. Controlled motion).
       5. The Closer Look (Camera slowly drifts a bit closer (no zoom, just drift). Model looks down at their outfit then looks up and smiles. Smooth transition).
-    NHIỆM VỤ 2: Viết Kịch bản Voiceover Tiếng Việt (LOGIC THÔNG MINH + TỰ NHIÊN)
-    - YÊU CẦU: Viết 2 kịch bản (35s) bán hàng, tuyệt đối không dùng tiếng Anh.
-    - PHONG CÁCH: Văn nói tự nhiên (đời thường), ngắt nghỉ bằng dấu câu chuẩn.
-    - LUẬT CẤM TỪ LAI CĂNG:
-      + Cấm: "Set", "Mix", "Match", "Size", "Form", "Item".
-      + Thay bằng: "Bộ này", "phối", "cỡ", "dáng/phom", "món này".
-    - LUẬT AN TOÀN CHẤT LIỆU: KHÔNG bịa tên chất liệu. CHỈ tả cảm giác.
-    - LOGIC NỘI DUNG:
-      + Style (Dễ thương/Cá tính/Sang trọng) -> Chọn từ vựng.
-      + Dáng (Rộng/Ôm/Basic) -> Chọn nỗi đau (Che bụng/Khoe dáng/Tiện lợi).
-    - CẤU TRÚC:
-      + Kịch bản 1 (Tâm sự): Kể về việc tìm ra món đồ này như một sự tình cờ thú vị, chia sẻ cảm giác thật khi mặc.
-      + Kịch bản 2 (Rủ rê): Kêu gọi bạn bè mua chung để đi chơi, nhấn mạnh độ xinh xẻo của đồ.
-    - ĐỊNH DẠNG ĐẦU RA (JSON BẮT BUỘC):
+    NHIỆM VỤ 2: Viết 2 Kịch bản Voiceover Tiếng Việt (Độ dài 100-110 từ/kịch bản - Đủ 30s):
+    - VAI DIỄN: ${p}
+    - GÓC NHÌN: ${a}
+    - HOOK ĐẦU: ${h}
+
+    DỮ LIỆU SẢN PHẨM:
+    ${fabricInstruction}
+    ${detailInstruction}
+
+    ⚠️ LUẬT AN TOÀN & VĂN PHONG (BẮT BUỘC):
+    1. NO ENGLISH: Cấm tuyệt đối dùng từ tiếng Anh chêm vào (Zoom, Mix, Match, Set, Items...). Phải dùng thuần Việt (Soi kỹ, Phối đồ, Bộ này, Món đồ...).
+    2. CÁCH DÙNG DATA: Nếu có thông tin người dùng cung cấp, hãy ưu tiên sử dụng nó để tăng độ chính xác. Nếu không, hãy dùng chế độ quan sát ảnh an toàn.
+    3. VĂN PHONG: Tự nhiên, đời thường, dùng từ đệm (nha, nhỉ, á, trộm vía). Cấm văn mẫu sáo rỗng.
+
+    OUTPUT JSON:
     {
-      "videoPrompts": ["Slow floating camera...", "Gentle handheld drift..."],
-      "voiceoverScripts": ["Lời thoại 1...", "Lời thoại 2..."]
+      "videoPrompts": ["...", "..."],
+      "voiceoverScripts": ["Kịch bản 1...", "Kịch bản 2..."]
     }
     `;
+
+    const base64Data = await blobToBase64(imageBlob);
 
     const response = await ai.models.generateContent({
       model: TEXT_MODEL_NAME,
       contents: {
         parts: [
-           { inlineData: { mimeType: "image/png", data: imageBase64 } },
+           { inlineData: { mimeType: "image/png", data: base64Data } },
            { text: prompt }
         ]
       },
@@ -427,7 +528,6 @@ export const generateEveraiSpeech = async (text: string): Promise<string> => {
             });
             
             if (!createResp.ok) {
-               // If server returns 5xx/4xx, throw to trigger retry or fail
                const errText = await createResp.text().catch(() => createResp.statusText);
                throw new Error(`HTTP Error ${createResp.status}: ${errText}`);
             }
@@ -437,7 +537,6 @@ export const generateEveraiSpeech = async (text: string): Promise<string> => {
         } catch (e) {
             console.warn(`Everai POST attempt ${i+1} failed:`, e);
             createError = e;
-            // Wait 1s before retry
             await new Promise(r => setTimeout(r, 1000));
         }
     }
@@ -446,23 +545,21 @@ export const generateEveraiSpeech = async (text: string): Promise<string> => {
         throw createError || new Error("Không thể kết nối đến máy chủ Everai (Failed to fetch).");
     }
     
-    // Kiểm tra Status = 1 (Thành công logic từ server)
     if (createData.status !== 1) {
         throw new Error(createData.error_message || "Lỗi không xác định từ Server Everai");
     }
 
-    // Lấy Request ID
     const requestId = createData.result?.request_id;
     if (!requestId) {
        throw new Error("Không tìm thấy request_id trong phản hồi thành công");
     }
 
-    // BƯỚC 2: Polling kết quả (Vòng lặp mỗi 2 giây)
+    // BƯỚC 2: Polling kết quả
     const MAX_TIME = 120000; // 2 phút timeout
     const startTime = Date.now();
     
     while (Date.now() - startTime < MAX_TIME) {
-       await new Promise(r => setTimeout(r, 2000)); // Chờ 2 giây
+       await new Promise(r => setTimeout(r, 2000));
        
        let statusBody;
        try {
@@ -472,42 +569,36 @@ export const generateEveraiSpeech = async (text: string): Promise<string> => {
            
            if (!statusResp.ok) {
                console.warn(`Polling HTTP Error ${statusResp.status}`);
-               continue; // Retry on next loop
+               continue;
            }
            statusBody = await statusResp.json();
        } catch (netErr) {
            console.warn("Polling Network Error (Failed to fetch), retrying...", netErr);
-           continue; // Retry on next loop
+           continue;
        }
        
-       // Kiểm tra API call status
        if (statusBody.status !== 1) {
            throw new Error(statusBody.error_message || "Lỗi khi kiểm tra trạng thái");
        }
 
-       // Kiểm tra trạng thái xử lý
        const resultData = statusBody.result;
-       const processStatus = resultData?.status; // 'new', 'processing', 'done', 'failed'
+       const processStatus = resultData?.status;
        
        if (processStatus === 'done' || processStatus === 'success') {
            const audioUrl = resultData.audio_link || resultData.url || resultData.audio_url; 
            if (!audioUrl) throw new Error("Trạng thái DONE nhưng không thấy link Audio");
-           
-           // CHANGE: Directly return URL to avoid CORS "Failed to fetch" on client side download
            return audioUrl;
        }
        
        if (processStatus === 'failed' || processStatus === 'error') {
            throw new Error("Server báo lỗi: Quá trình tạo audio thất bại.");
        }
-       
-       // Nếu đang xử lý (new/processing), tiếp tục vòng lặp
     }
     
     throw new Error("Hết thời gian chờ (Timeout) sau 120s");
 
   } catch (error: any) {
     console.error("Everai TTS Logic Error:", error);
-    throw error; // Ném lỗi gốc ra để UI hiển thị chính xác message
+    throw error;
   }
 };
